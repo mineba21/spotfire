@@ -1,0 +1,102 @@
+{% comment %}
+partials/sidebar.html
+
+역할: 좌측 sidebar 필터 UI 렌더링
+- context: filter_options (views.index 에서 전달)
+- multi-select: Ctrl/Cmd 클릭으로 복수 선택, "ALL" 선택 시 전체
+- rank filter: M/W/D 각각 숫자 입력
+{% endcomment %}
+
+<aside class="sf-sidebar" id="sfSidebar">
+  <div class="sf-sidebar__header">
+    <span class="sf-sidebar__title">Filter</span>
+    <button class="sf-sidebar__collapse-btn" id="sidebarCollapseBtn" title="접기">&#8249;</button>
+  </div>
+
+  <!-- ── Rank Filter ─────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label">Rank Limit</label>
+    <div class="sf-rank-group">
+      <div class="sf-rank-item">
+        <span class="sf-rank-item__label">M</span>
+        <input type="number" id="rankM" class="sf-rank-item__input"
+               value="999" min="1" max="999" title="월별 rank 상한">
+      </div>
+      <div class="sf-rank-item">
+        <span class="sf-rank-item__label">W</span>
+        <input type="number" id="rankW" class="sf-rank-item__input"
+               value="999" min="1" max="999" title="주별 rank 상한">
+      </div>
+      <div class="sf-rank-item">
+        <span class="sf-rank-item__label">D</span>
+        <input type="number" id="rankD" class="sf-rank-item__input"
+               value="999" min="1" max="999" title="일별 rank 상한">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Line ───────────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterLine">Line</label>
+    <select id="filterLine" name="line" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.lines %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── SDWT Prod ───────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterSdwtProd">SDWT Prod</label>
+    <select id="filterSdwtProd" name="sdwt_prod" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.sdwt_prods %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── EQP Model ───────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterEqpModel">EQP Model</label>
+    <select id="filterEqpModel" name="eqp_model" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.eqp_models %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── EQP ID ──────────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterEqpId">EQP ID</label>
+    <select id="filterEqpId" name="eqp_id" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.eqp_ids %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── Param Type ──────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterParamType">Param Type</label>
+    <select id="filterParamType" name="param_type" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.param_types %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- ── Apply 버튼 ──────────────────────────────────── -->
+  <div class="sf-sidebar__section">
+    <button id="applyFilterBtn" class="sf-btn sf-btn--primary w-100">
+      Apply Filter
+    </button>
+    <button id="resetFilterBtn" class="sf-btn sf-btn--secondary w-100 mt-1">
+      Reset
+    </button>
+  </div>
+</aside>

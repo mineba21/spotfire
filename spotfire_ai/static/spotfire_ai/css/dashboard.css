@@ -1,0 +1,897 @@
+/* ═══════════════════════════════════════════════════════════════
+   dashboard.css — Spotfire Report 대시보드 스타일
+   ── 색상은 CSS 변수로 관리 → light/dark 테마 전환 용이
+   ══════════════════════════════════════════════════════════════ */
+
+/* ─── 0. CSS 변수 (light 테마 기본값) ─────────────────────── */
+:root {
+  --sf-bg:           #f4f6f9;
+  --sf-surface:      #ffffff;
+  --sf-sidebar-bg:   #1e2a3a;
+  --sf-sidebar-text: #c8d6e5;
+  --sf-sidebar-w:    220px;
+  --sf-topbar-h:     52px;
+  --sf-chart-h:      230px;   /* chart row 높이 */
+  --sf-border:       #dde3ec;
+  --sf-text:         #2c3e50;
+  --sf-text-muted:   #6c757d;
+  --sf-primary:      #3a7bd5;
+  --sf-primary-h:    #2563c0;
+  --sf-accent:       #e8f0fe;
+  --sf-highlight:    #fff3cd;  /* Top Show 기준 컬럼 하이라이트 배경 */
+  --sf-danger:       #e74c3c;
+  --sf-rank-color:   #4C72B0;  /* 순위 숫자 색상 */
+  --sf-radius:       6px;
+  --sf-shadow:       0 2px 8px rgba(0,0,0,0.08);
+  --sf-transition:   0.2s ease;
+
+  /* ── AI Copilot 전용 변수 ─────────────────────────────── */
+  --sf-copilot-w:        340px;
+  --sf-chat-user-bg:     #3a7bd5;
+  --sf-chat-user-text:   #ffffff;
+  --sf-chat-ai-bg:       #f0f4fa;
+  --sf-chat-ai-text:     #2c3e50;
+  --sf-chat-ai-border:   #dde3ec;
+}
+
+/* ─── dark 테마 (prefers-color-scheme) ───────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sf-bg:           #0f1923;
+    --sf-surface:      #1a2535;
+    --sf-sidebar-bg:   #111c2a;
+    --sf-sidebar-text: #a8b8cc;
+    --sf-border:       #2a3a4f;
+    --sf-text:         #d0dce8;
+    --sf-text-muted:   #7a8fa3;
+    --sf-accent:       #1a2a45;
+    --sf-highlight:    #3a3000;
+
+    --sf-chat-ai-bg:     #1e2d40;
+    --sf-chat-ai-text:   #d0dce8;
+    --sf-chat-ai-border: #2a3a4f;
+  }
+}
+
+/* ─── 1. 기본 리셋 ───────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body.sf-body {
+  font-family: "Pretendard", "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+  background: var(--sf-bg);
+  color: var(--sf-text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ─── 2. 레이아웃: sidebar | main | copilot ───────────────── */
+.sf-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ─── 3. Sidebar ─────────────────────────────────────────── */
+.sf-sidebar {
+  width: var(--sf-sidebar-w);
+  min-width: var(--sf-sidebar-w);
+  background: var(--sf-sidebar-bg);
+  color: var(--sf-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: width var(--sf-transition), min-width var(--sf-transition);
+  flex-shrink: 0;
+}
+
+.sf-sidebar--collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sf-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+
+.sf-sidebar__title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+}
+
+.sf-sidebar__collapse-btn {
+  background: none;
+  border: none;
+  color: var(--sf-sidebar-text);
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
+}
+.sf-sidebar__collapse-btn:hover { color: #fff; }
+
+.sf-sidebar__section {
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.sf-sidebar__section-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #7a92a8;
+  margin-bottom: 5px;
+}
+
+/* multi-select */
+.sf-select {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--sf-radius);
+  color: var(--sf-sidebar-text);
+  font-size: 12px;
+  padding: 2px 4px;
+  min-height: 72px;
+  max-height: 100px;
+  outline: none;
+}
+.sf-select option { padding: 3px 4px; }
+.sf-select option:checked {
+  background: var(--sf-primary);
+  color: #fff;
+}
+
+/* Rank Filter */
+.sf-rank-group { display: flex; gap: 8px; }
+.sf-rank-item  { display: flex; align-items: center; gap: 4px; flex: 1; }
+.sf-rank-item__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7a92a8;
+  width: 14px;
+}
+.sf-rank-item__input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: var(--sf-sidebar-text);
+  font-size: 12px;
+  padding: 3px 5px;
+  text-align: right;
+  outline: none;
+}
+.sf-rank-item__input:focus { border-color: var(--sf-primary); }
+
+/* sidebar 버튼 */
+.sf-btn {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--sf-radius);
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  transition: background var(--sf-transition);
+}
+.sf-btn--primary  { background: var(--sf-primary); color: #fff; }
+.sf-btn--primary:hover  { background: var(--sf-primary-h); }
+.sf-btn--secondary {
+  background: rgba(255,255,255,0.08);
+  color: var(--sf-sidebar-text);
+  margin-top: 5px;
+}
+.sf-btn--secondary:hover { background: rgba(255,255,255,0.14); }
+
+/* ─── 4. 메인 영역 ───────────────────────────────────────── */
+.sf-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: flex var(--sf-transition);
+  min-width: 0;   /* flex child 가 내용보다 작아질 수 있도록 */
+}
+.sf-main--full { margin-left: 0; }
+
+/* 상단 헤더바 */
+.sf-topbar {
+  height: var(--sf-topbar-h);
+  background: var(--sf-surface);
+  border-bottom: 1px solid var(--sf-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+  box-shadow: var(--sf-shadow);
+}
+.sf-topbar__left  { display: flex; align-items: center; gap: 10px; }
+.sf-topbar__right { display: flex; align-items: center; gap: 8px; }
+
+.sf-topbar__menu-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--sf-text-muted);
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.sf-topbar__menu-btn:hover { background: var(--sf-accent); }
+
+.sf-topbar__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--sf-text);
+}
+
+.sf-topbar__label {
+  font-size: 12px;
+  color: var(--sf-text-muted);
+}
+
+/* 헤더/툴바 소형 select */
+.sf-select-sm {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  background: var(--sf-surface);
+  color: var(--sf-text);
+  outline: none;
+}
+.sf-select-sm:focus { border-color: var(--sf-primary); }
+
+/* 헤더/툴바 소형 number input */
+.sf-input-sm {
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  background: var(--sf-surface);
+  color: var(--sf-text);
+  outline: none;
+  text-align: right;
+}
+.sf-input-sm:focus { border-color: var(--sf-primary); }
+
+/* AI Copilot 토글 버튼 (topbar 우측) */
+.sf-copilot-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: var(--sf-accent);
+  border: 1px solid var(--sf-primary);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sf-primary);
+  cursor: pointer;
+  transition: background var(--sf-transition), color var(--sf-transition);
+  white-space: nowrap;
+}
+.sf-copilot-toggle-btn:hover {
+  background: var(--sf-primary);
+  color: #fff;
+}
+
+/* ─── 5. Chart 영역 ──────────────────────────────────────── */
+.sf-chart-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px 6px;
+  flex-shrink: 0;
+}
+
+.sf-chart-card {
+  flex: 1;
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  box-shadow: var(--sf-shadow);
+  padding: 8px 8px 4px;
+  position: relative;
+  height: var(--sf-chart-h);
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.sf-chart-card__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sf-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+
+.sf-chart-canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+.sf-chart-card__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.75);
+  font-size: 12px;
+  color: var(--sf-text-muted);
+  border-radius: var(--sf-radius);
+  pointer-events: none;
+}
+
+/* ─── 6. 컨텍스트 배지 ───────────────────────────────────── */
+.sf-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  background: var(--sf-accent);
+  border-bottom: 1px solid var(--sf-border);
+  flex-shrink: 0;
+}
+.sf-context-bar__label {
+  font-size: 12px;
+  color: var(--sf-text-muted);
+}
+.sf-context-bar__badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sf-primary);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-primary);
+  border-radius: 20px;
+  padding: 1px 10px;
+}
+.sf-context-bar__clear {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--sf-border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--sf-text-muted);
+  padding: 2px 8px;
+  transition: color var(--sf-transition), border-color var(--sf-transition);
+}
+.sf-context-bar__clear:hover { color: var(--sf-danger); border-color: var(--sf-danger); }
+
+/* ─── 7. Detail 영역 ─────────────────────────────────────── */
+.sf-detail {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 12px 8px;
+  min-height: 0;
+}
+
+/* 툴바: radio + Top 옵션 + 건수 */
+.sf-detail__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--sf-border);
+  margin-bottom: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-height: 34px;
+}
+
+.sf-radio-group { display: flex; gap: 14px; align-items: center; }
+.sf-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--sf-text);
+  user-select: none;
+}
+.sf-radio-label input[type="radio"] { accent-color: var(--sf-primary); }
+
+.sf-top-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sf-detail__count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--sf-text-muted);
+  white-space: nowrap;
+}
+
+/* ── Detail 로딩 오버레이 ────────────────────────────────── */
+.sf-detail__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px;
+  color: var(--sf-text-muted);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+/* ── 스피너 애니메이션 ──────────────────────────────────── */
+.sf-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--sf-border);
+  border-top-color: var(--sf-primary);
+  border-radius: 50%;
+  animation: sf-spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes sf-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Detail 본문 래퍼 ────────────────────────────────────── */
+.sf-detail__body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* rawDataPanel 자체는 flex child → 높이를 sf-detail__body 에 맞춤 */
+#rawDataPanel {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ─── 8. 테이블 ──────────────────────────────────────────── */
+.sf-table-wrapper {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  background: var(--sf-surface);
+}
+
+/* Top Show 우측 테이블 고정 높이 */
+.sf-table-wrapper--top {
+  max-height: 360px;
+}
+
+.sf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* sticky 헤더 */
+.sf-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f0f4fa;
+  color: var(--sf-text-muted);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--sf-border);
+  text-align: left;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-color-scheme: dark) {
+  .sf-table th { background: #1e2d40; }
+}
+
+.sf-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--sf-border);
+  color: var(--sf-text);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sf-table tbody tr:hover > td { background: var(--sf-accent); }
+.sf-table tbody tr:last-child td { border-bottom: none; }
+
+/* 빈 데이터 메시지 */
+.sf-table-empty {
+  padding: 30px;
+  text-align: center;
+  color: var(--sf-text-muted);
+  font-size: 13px;
+}
+
+/* 행 수 초과 안내 (Rawdata Show 테이블 하단) */
+.sf-table-truncate-msg {
+  text-align: center;
+  color: var(--sf-text-muted);
+  padding: 8px;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* ─── 9. Top Show 레이아웃 ───────────────────────────────── */
+#topDataPanel {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.sf-top-layout {
+  display: flex;
+  gap: 12px;
+  height: 360px;
+}
+.sf-top-layout__chart {
+  flex: 0 0 46%;
+  min-width: 0;
+  overflow: hidden;
+}
+.sf-top-layout__table {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sf-top-chart {
+  height: 100%;
+  width: 100%;
+}
+
+/* 순위 셀 (Top Show 테이블 첫 번째 컬럼) */
+.sf-rank-cell {
+  font-weight: 700;
+  color: var(--sf-rank-color);
+  text-align: center;
+  width: 32px;
+}
+
+/* 기준 컬럼 하이라이트 */
+.sf-highlight-cell {
+  font-weight: 700;
+  color: var(--sf-primary);
+  background: var(--sf-highlight) !important;
+}
+
+/* ─── 10. 토스트 ─────────────────────────────────────────── */
+.sf-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #2c3e50;
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: var(--sf-radius);
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+  z-index: 9999;
+  max-width: 360px;
+}
+.sf-toast--show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ─── 11. AI Copilot 드로어 ──────────────────────────────── */
+
+/*
+ * .sf-copilot 은 .sf-layout 의 마지막 flex child.
+ * 기본: width:0, overflow:hidden → 화면에서 완전히 숨겨짐
+ * .sf-copilot--open: width:var(--sf-copilot-w) → 슬라이드인
+ * sf-main 은 flex:1 이므로 copilot 이 열릴 때 자동으로 줄어든다.
+ */
+.sf-copilot {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--sf-surface);
+  border-left: 1px solid var(--sf-border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: width var(--sf-transition), min-width var(--sf-transition);
+  box-shadow: -2px 0 12px rgba(0,0,0,0.06);
+}
+
+.sf-copilot--open {
+  width: var(--sf-copilot-w);
+  min-width: var(--sf-copilot-w);
+}
+
+/* 헤더 */
+.sf-copilot__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: var(--sf-topbar-h);
+  border-bottom: 1px solid var(--sf-border);
+  flex-shrink: 0;
+  background: var(--sf-surface);
+}
+
+.sf-copilot__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sf-text);
+  flex-shrink: 0;
+}
+
+/* page_context 드롭다운 */
+.sf-copilot__context-select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 닫기 버튼 */
+.sf-copilot__close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--sf-text-muted);
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.sf-copilot__close-btn:hover { background: var(--sf-accent); color: var(--sf-text); }
+
+/* 채팅 이력 스크롤 영역 */
+.sf-copilot__history {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* 선택된 bar 컨텍스트 힌트 */
+.sf-copilot__context-hint {
+  font-size: 11px;
+  color: var(--sf-primary);
+  background: var(--sf-accent);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin: 0 10px 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── 12. 채팅 버블 ──────────────────────────────────────── */
+
+.sf-chat-msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 92%;
+}
+
+/* 사용자 메시지: 오른쪽 정렬 */
+.sf-chat-msg--user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+/* AI 메시지: 왼쪽 정렬 */
+.sf-chat-msg--ai {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.sf-chat-msg__bubble {
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.sf-chat-msg--user .sf-chat-msg__bubble {
+  background: var(--sf-chat-user-bg);
+  color: var(--sf-chat-user-text);
+  border-bottom-right-radius: 4px;
+}
+
+.sf-chat-msg--ai .sf-chat-msg__bubble {
+  background: var(--sf-chat-ai-bg);
+  color: var(--sf-chat-ai-text);
+  border: 1px solid var(--sf-chat-ai-border);
+  border-bottom-left-radius: 4px;
+}
+
+/* ── 로딩 점 애니메이션 ─────────────────────────────────── */
+.sf-chat-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sf-chat-dots span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sf-text-muted);
+  animation: sf-dot-bounce 1.2s infinite ease-in-out;
+}
+.sf-chat-dots span:nth-child(1) { animation-delay: 0s; }
+.sf-chat-dots span:nth-child(2) { animation-delay: 0.2s; }
+.sf-chat-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes sf-dot-bounce {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
+  40%           { transform: scale(1.1); opacity: 1; }
+}
+
+/* ── 결과 미리보기 테이블 (채팅 버블 아래) ─────────────── */
+.sf-chat-preview-wrap {
+  margin-top: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--sf-surface);
+}
+
+.sf-chat-preview-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.sf-chat-preview-table th {
+  position: sticky;
+  top: 0;
+  background: #f0f4fa;
+  color: var(--sf-text-muted);
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--sf-border);
+  text-align: left;
+}
+@media (prefers-color-scheme: dark) {
+  .sf-chat-preview-table th { background: #1e2d40; }
+}
+
+.sf-chat-preview-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--sf-border);
+  color: var(--sf-text);
+}
+.sf-chat-preview-table tbody tr:last-child td { border-bottom: none; }
+.sf-chat-preview-table tbody tr:hover td { background: var(--sf-accent); }
+
+/* ─── 13. 입력 영역 ──────────────────────────────────────── */
+.sf-copilot__input-area {
+  flex-shrink: 0;
+  border-top: 1px solid var(--sf-border);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--sf-surface);
+}
+
+/* 빠른 질문 버튼 행 */
+.sf-quick-btns {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.sf-quick-btn {
+  padding: 3px 9px;
+  font-size: 11px;
+  border: 1px solid var(--sf-border);
+  border-radius: 12px;
+  background: var(--sf-bg);
+  color: var(--sf-text-muted);
+  cursor: pointer;
+  transition: border-color var(--sf-transition), color var(--sf-transition),
+              background var(--sf-transition);
+  white-space: nowrap;
+}
+.sf-quick-btn:hover {
+  border-color: var(--sf-primary);
+  color: var(--sf-primary);
+  background: var(--sf-accent);
+}
+
+/* textarea + send 버튼 행 */
+.sf-copilot__input-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.sf-copilot__textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 100px;
+  resize: none;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius);
+  background: var(--sf-bg);
+  color: var(--sf-text);
+  outline: none;
+  line-height: 1.45;
+  transition: border-color var(--sf-transition);
+  overflow-y: auto;
+}
+.sf-copilot__textarea:focus { border-color: var(--sf-primary); }
+.sf-copilot__textarea::placeholder { color: var(--sf-text-muted); }
+
+.sf-copilot__send-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--sf-radius);
+  background: var(--sf-primary);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--sf-transition);
+}
+.sf-copilot__send-btn:hover    { background: var(--sf-primary-h); }
+.sf-copilot__send-btn:disabled {
+  background: var(--sf-border);
+  cursor: not-allowed;
+}
+
+/* ─── 14. 유틸 ───────────────────────────────────────────── */
+.w-100 { width: 100%; }
+.mt-1  { margin-top: 6px; }

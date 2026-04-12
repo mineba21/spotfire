@@ -1,0 +1,212 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spotfire Report — 생산/설비 이상 현황</title>
+
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <link rel="stylesheet" href="{% static 'spotfire_ai/css/dashboard.css' %}">
+
+  {# CSRF 토큰 (JS fetch POST 에서 X-CSRFToken 헤더로 사용) #}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+
+  {# API URL 전역 주입 #}
+  <script>
+    window.SF_URLS = {
+      reportData   : "{% url 'spotfire_ai:api_report_data' %}",
+      clickDetail  : "{% url 'spotfire_ai:api_click_detail' %}",
+      filterOptions: "{% url 'spotfire_ai:api_filter_options' %}",
+      askAi        : "{% url 'spotfire_ai:api_ask_ai' %}",
+    };
+  </script>
+</head>
+
+<body class="sf-body">
+<div class="sf-layout" id="sfLayout">
+
+  <!-- ▸ 좌측 Sidebar ──────────────────────────────────────── -->
+  {% include "spotfire_ai/partials/sidebar.html" %}
+
+  <!-- ▸ 메인 영역 ─────────────────────────────────────────── -->
+  <main class="sf-main" id="sfMain">
+
+    <!-- 상단 헤더바 -->
+    <header class="sf-topbar">
+      <div class="sf-topbar__left">
+        <button class="sf-topbar__menu-btn" id="sidebarToggleBtn" title="sidebar 열기/닫기">
+          &#9776;
+        </button>
+        <h1 class="sf-topbar__title">생산/설비 이상 현황 리포트</h1>
+      </div>
+      <div class="sf-topbar__right">
+        <label class="sf-topbar__label" for="yFieldSelect">Y축</label>
+        <select id="yFieldSelect" class="sf-select-sm">
+          <option value="cnt" selected>Count</option>
+          <option value="ratio">Ratio (%)</option>
+        </select>
+
+        <!-- AI Copilot 토글 버튼 -->
+        <button class="sf-copilot-toggle-btn" id="copilotToggleBtn" title="AI Copilot 열기/닫기">
+          🤖 AI Copilot
+        </button>
+      </div>
+    </header>
+
+    <!-- ▸ M / W / D Chart -->
+    <section class="sf-chart-row">
+      <div class="sf-chart-card">
+        <div class="sf-chart-card__title">Monthly</div>
+        <div id="chartM" class="sf-chart-canvas"></div>
+        <div class="sf-chart-card__loading" id="loadingM">Loading…</div>
+      </div>
+      <div class="sf-chart-card">
+        <div class="sf-chart-card__title">Weekly</div>
+        <div id="chartW" class="sf-chart-canvas"></div>
+        <div class="sf-chart-card__loading" id="loadingW">Loading…</div>
+      </div>
+      <div class="sf-chart-card">
+        <div class="sf-chart-card__title">Daily</div>
+        <div id="chartD" class="sf-chart-canvas"></div>
+        <div class="sf-chart-card__loading" id="loadingD">Loading…</div>
+      </div>
+    </section>
+
+    <!-- ▸ 클릭 컨텍스트 배지 -->
+    <div class="sf-context-bar" id="contextBar" style="display:none;">
+      <span class="sf-context-bar__label">선택됨:</span>
+      <span class="sf-context-bar__badge" id="contextBadge"></span>
+      <button class="sf-context-bar__clear" id="contextClearBtn">✕ 초기화</button>
+    </div>
+
+    <!-- ▸ Detail 영역 -->
+    <section class="sf-detail" id="sfDetail" style="display:none;">
+
+      <div class="sf-detail__toolbar">
+        <div class="sf-radio-group" role="group">
+          <label class="sf-radio-label">
+            <input type="radio" name="detailMode" value="raw" checked> Rawdata Show
+          </label>
+          <label class="sf-radio-label">
+            <input type="radio" name="detailMode" value="top"> Top Show
+          </label>
+        </div>
+        <div class="sf-top-options" id="topOptions" style="display:none;">
+          <label class="sf-topbar__label" for="topFieldSelect">기준 컬럼</label>
+          <select id="topFieldSelect" class="sf-select-sm">
+            <option value="value">value</option>
+          </select>
+          <label class="sf-topbar__label" for="topNInput">Top N</label>
+          <input type="number" id="topNInput" class="sf-input-sm"
+                 value="10" min="1" max="200" style="width:56px;">
+        </div>
+        <span class="sf-detail__count" id="detailCount"></span>
+      </div>
+
+      <div class="sf-detail__loading" id="detailLoading" style="display:none;">
+        <div class="sf-spinner"></div>
+        <span>데이터 불러오는 중…</span>
+      </div>
+
+      <div class="sf-detail__body" id="detailBody">
+        <div id="rawDataPanel">
+          <div class="sf-table-wrapper">
+            <table class="sf-table" id="rawTable">
+              <thead id="rawTableHead"></thead>
+              <tbody id="rawTableBody"></tbody>
+            </table>
+            <div class="sf-table-empty" id="rawTableEmpty" style="display:none;">
+              데이터가 없습니다.
+            </div>
+          </div>
+        </div>
+        <div id="topDataPanel" style="display:none;">
+          <div class="sf-top-layout">
+            <div class="sf-top-layout__chart">
+              <div id="chartTop" class="sf-top-chart"></div>
+            </div>
+            <div class="sf-top-layout__table">
+              <div class="sf-table-wrapper sf-table-wrapper--top">
+                <table class="sf-table" id="topTable">
+                  <thead id="topTableHead"></thead>
+                  <tbody id="topTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ▸ AI Copilot 패널 (우측 드로어) ──────────────────────── -->
+  <aside class="sf-copilot" id="sfCopilot">
+
+    <!-- 패널 헤더 -->
+    <div class="sf-copilot__header">
+      <span class="sf-copilot__title">🤖 AI Copilot</span>
+      <div class="sf-copilot__header-right">
+        <!--
+          page_context: 현재 어떤 데이터를 보고 있는지 명시
+          서버의 PAGE_CONTEXT_DEFAULTS 와 일치해야 한다
+        -->
+        <select id="pageContextSelect" class="sf-select-sm" title="분석 컨텍스트">
+          {% for ctx in page_contexts %}
+          <option value="{{ ctx }}">{{ ctx }}</option>
+          {% endfor %}
+        </select>
+        <button class="sf-copilot__close-btn" id="copilotCloseBtn" title="닫기">✕</button>
+      </div>
+    </div>
+
+    <!-- 대화 이력 -->
+    <div class="sf-copilot__history" id="copilotHistory">
+      <!-- 초기 안내 메시지 -->
+      <div class="sf-chat-msg sf-chat-msg--ai">
+        <div class="sf-chat-msg__bubble">
+          안녕하세요! 설비 이상 현황에 대해 질문해 주세요.<br>
+          예) "상위 10개 설비는?" / "라인별 평균값은?" / "interlock 가장 많은 EQP?"
+        </div>
+      </div>
+    </div>
+
+    <!-- 질문 입력 영역 -->
+    <div class="sf-copilot__input-area">
+      <!-- 현재 선택 컨텍스트 표시 -->
+      <div class="sf-copilot__context-hint" id="copilotContextHint"></div>
+
+      <div class="sf-copilot__input-row">
+        <textarea
+          id="aiInput"
+          class="sf-copilot__textarea"
+          placeholder="질문을 입력하세요… (Enter: 전송, Shift+Enter: 줄바꿈)"
+          rows="2"
+        ></textarea>
+        <button id="aiSendBtn" class="sf-copilot__send-btn" title="전송">
+          &#9654;
+        </button>
+      </div>
+
+      <!-- 빠른 질문 버튼 -->
+      <div class="sf-copilot__quick-btns">
+        <button class="sf-quick-btn" data-q="발생 건수 상위 10개 설비는?">Top 설비</button>
+        <button class="sf-quick-btn" data-q="라인별 집계 결과를 보여줘">라인별</button>
+        <button class="sf-quick-btn" data-q="설비별 평균값을 알려줘">평균값</button>
+      </div>
+    </div>
+
+  </aside>
+
+</div><!-- /sf-layout -->
+
+<div class="sf-toast" id="sfToast" role="alert" aria-live="assertive"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{% static 'spotfire_ai/js/dashboard.js' %}"></script>
+</body>
+</html>
