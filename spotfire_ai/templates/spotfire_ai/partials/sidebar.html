@@ -1,41 +1,39 @@
-{% comment %}
-partials/sidebar.html
-
-역할: 좌측 sidebar 필터 UI 렌더링
-- context: filter_options (views.index 에서 전달)
-- multi-select: Ctrl/Cmd 클릭으로 복수 선택, "ALL" 선택 시 전체
-- rank filter: M/W/D 각각 숫자 입력
-{% endcomment %}
+{% comment %}partials/sidebar.html{% endcomment %}
 
 <aside class="sf-sidebar" id="sfSidebar">
+
   <div class="sf-sidebar__header">
-    <span class="sf-sidebar__title">Filter</span>
-    <button class="sf-sidebar__collapse-btn" id="sidebarCollapseBtn" title="접기">&#8249;</button>
+    <div class="sf-sidebar__brand">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity=".7">
+        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+      </svg>
+      <span class="sf-sidebar__title">Filters</span>
+    </div>
+    <button class="sf-sidebar__collapse-btn" id="sidebarCollapseBtn" title="접기">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
   </div>
 
-  <!-- ── Rank Filter ─────────────────────────────────── -->
+  <!-- Rank Limit -->
   <div class="sf-sidebar__section">
-    <label class="sf-sidebar__section-label">Rank Limit</label>
+    <span class="sf-sidebar__section-label">Rank Limit</span>
     <div class="sf-rank-group">
       <div class="sf-rank-item">
         <span class="sf-rank-item__label">M</span>
-        <input type="number" id="rankM" class="sf-rank-item__input"
-               value="999" min="1" max="999" title="월별 rank 상한">
+        <input type="number" id="rankM" class="sf-rank-item__input" value="999" min="1" max="999">
       </div>
       <div class="sf-rank-item">
         <span class="sf-rank-item__label">W</span>
-        <input type="number" id="rankW" class="sf-rank-item__input"
-               value="999" min="1" max="999" title="주별 rank 상한">
+        <input type="number" id="rankW" class="sf-rank-item__input" value="999" min="1" max="999">
       </div>
       <div class="sf-rank-item">
         <span class="sf-rank-item__label">D</span>
-        <input type="number" id="rankD" class="sf-rank-item__input"
-               value="999" min="1" max="999" title="일별 rank 상한">
+        <input type="number" id="rankD" class="sf-rank-item__input" value="999" min="1" max="999">
       </div>
     </div>
   </div>
 
-  <!-- ── Line ───────────────────────────────────────── -->
+  <!-- Line -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterLine">Line</label>
     <select id="filterLine" name="line" multiple class="sf-select">
@@ -46,7 +44,7 @@ partials/sidebar.html
     </select>
   </div>
 
-  <!-- ── SDWT Prod ───────────────────────────────────── -->
+  <!-- SDWT Prod -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterSdwtProd">SDWT Prod</label>
     <select id="filterSdwtProd" name="sdwt_prod" multiple class="sf-select">
@@ -57,7 +55,7 @@ partials/sidebar.html
     </select>
   </div>
 
-  <!-- ── EQP Model ───────────────────────────────────── -->
+  <!-- EQP Model -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterEqpModel">EQP Model</label>
     <select id="filterEqpModel" name="eqp_model" multiple class="sf-select">
@@ -68,7 +66,7 @@ partials/sidebar.html
     </select>
   </div>
 
-  <!-- ── EQP ID ──────────────────────────────────────── -->
+  <!-- EQP ID -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterEqpId">EQP ID</label>
     <select id="filterEqpId" name="eqp_id" multiple class="sf-select">
@@ -79,7 +77,7 @@ partials/sidebar.html
     </select>
   </div>
 
-  <!-- ── Param Type ──────────────────────────────────── -->
+  <!-- Param Type -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterParamType">Param Type</label>
     <select id="filterParamType" name="param_type" multiple class="sf-select">
@@ -90,13 +88,16 @@ partials/sidebar.html
     </select>
   </div>
 
-  <!-- ── Apply 버튼 ──────────────────────────────────── -->
-  <div class="sf-sidebar__section">
-    <button id="applyFilterBtn" class="sf-btn sf-btn--primary w-100">
+  <!-- Buttons -->
+  <div class="sf-sidebar__footer">
+    <button id="applyFilterBtn" class="sf-btn sf-btn--primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
       Apply Filter
     </button>
-    <button id="resetFilterBtn" class="sf-btn sf-btn--secondary w-100 mt-1">
+    <button id="resetFilterBtn" class="sf-btn sf-btn--ghost">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.33"/></svg>
       Reset
     </button>
   </div>
+
 </aside>

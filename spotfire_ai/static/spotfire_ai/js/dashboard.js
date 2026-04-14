@@ -38,9 +38,9 @@ const CHART_IDS = { M: "chartM", W: "chartW", D: "chartD" };
 
 /** Plotly 색상 팔레트 */
 const COLORS = [
-  "#4C72B0", "#DD8452", "#55A868", "#C44E52",
-  "#8172B2", "#937860", "#DA8BC3", "#8C8C8C",
-  "#CCB974", "#64B5CD",
+  "#6366f1", "#06b6d4", "#10b981", "#f59e0b",
+  "#ef4444", "#8b5cf6", "#ec4899", "#3b82f6",
+  "#14b8a6", "#f97316",
 ];
 
 /** raw 테이블 DOM 렌더 최대 행 수 (메모리/퍼포먼스 보호) */
@@ -110,6 +110,9 @@ const state = {
 // ═══════════════════════════════════════════════════════════════
 
 document.addEventListener("DOMContentLoaded", () => {
+  // 테마 초기화
+  initTheme();
+
   // 페이지 로드 시 chart 바로 조회
   fetchReportData();
 
@@ -135,6 +138,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // sidebar 열기/닫기
   document.getElementById("sidebarCollapseBtn").addEventListener("click", () => toggleSidebar(false));
   document.getElementById("sidebarToggleBtn").addEventListener("click",   () => toggleSidebar(true));
+
+  // 테마 토글
+  document.getElementById("themeToggleBtn").addEventListener("click", toggleTheme);
 
   // ── AI Copilot ────────────────────────────────────────────
   document.getElementById("copilotToggleBtn").addEventListener("click", () => toggleCopilot(true));
@@ -358,15 +364,18 @@ function renderBarChart(flag, data) {
     hovertemplate: "<b>%{x}</b><br>%{y:,.0f}<extra>%{fullData.name}</extra>",
   }));
 
-  const yLabel = document.getElementById("yFieldSelect").value;
+  const yLabel   = document.getElementById("yFieldSelect").value;
+  const isDark   = document.documentElement.getAttribute("data-theme") === "dark";
+  const fontColor = isDark ? "#94a3b8" : "#64748b";
+  const hoverBg   = isDark ? "#1e293b" : "#0f172a";
 
   const layout = {
-    barmode: "group",              // grouped (stacked 아님)
+    barmode: "group",
     margin:  { t: 8, b: 56, l: 46, r: 8 },
     xaxis: {
       tickangle:  -30,
       automargin: true,
-      fixedrange: true,            // 사용자 zoom 비활성
+      fixedrange: true,
     },
     yaxis: {
       title:      { text: yLabel, font: { size: 11 } },
@@ -380,8 +389,8 @@ function renderBarChart(flag, data) {
     },
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
-    font:          { size: 11 },
-    hoverlabel:    { bgcolor: "#2c3e50", font: { color: "#fff", size: 11 } },
+    font:          { family: "Inter, sans-serif", size: 11, color: fontColor },
+    hoverlabel:    { bgcolor: hoverBg, font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
   };
 
   // ── Plotly.react → 초기/갱신 모두 이 함수로 처리 ─────────
@@ -704,8 +713,8 @@ function renderTopPanel() {
     },
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
-    font:          { size: 11 },
-    hoverlabel:    { bgcolor: "#2c3e50", font: { color: "#fff", size: 11 } },
+    font:          { family: "Inter, sans-serif", size: 11, color: "#64748b" },
+    hoverlabel:    { bgcolor: "#0f172a", font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
   };
 
   Plotly.react("chartTop", traces, layout, {
@@ -836,6 +845,40 @@ function setDetailLoading(isLoading) {
 // ═══════════════════════════════════════════════════════════════
 // 10. Sidebar / UI 유틸
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * 저장된 테마(localStorage) 또는 시스템 설정을 읽어 적용한다.
+ * <head> 의 인라인 스크립트와 동일한 로직 — DOMContentLoaded 시 재확인.
+ */
+function initTheme() {
+  const saved = localStorage.getItem("sf-theme");
+  const preferred = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  _applyTheme(saved || preferred);
+}
+
+/**
+ * 현재 테마를 반전하여 적용하고 localStorage 에 저장한다.
+ * Plotly 차트도 즉시 테마에 맞게 재렌더한다.
+ */
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  _applyTheme(current === "dark" ? "light" : "dark");
+
+  // 테마 변경 후 차트 폰트/배경 색상 반영을 위해 재렌더
+  VALID_FLAGS.forEach((flag) => {
+    if (state.chartData[flag]) renderBarChart(flag, state.chartData[flag]);
+  });
+  if (state.rawRows.length && state.detailMode === "top") renderTopPanel();
+}
+
+/**
+ * data-theme 속성 설정 + localStorage 저장.
+ * @param {"light"|"dark"} theme
+ */
+function _applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("sf-theme", theme);
+}
 
 /**
  * sidebar 를 열거나 닫는다.

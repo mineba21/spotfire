@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Spotfire Django",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["/Users/mac/Desktop/coding/spotfire/run.sh"],
+      "port": 8100
+    }
+  ]
+}
