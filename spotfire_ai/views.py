@@ -6,7 +6,6 @@ spotfire_ai/views.py
   - 비즈니스 로직은 services/ 에 위임한다
   - 성공: {"ok": true,  "data":  ...}
   - 실패: {"ok": false, "error": "..."}
-  - view 함수 자체는 짧게 유지한다
 """
 
 import json
@@ -25,9 +24,6 @@ from spotfire_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────
-# 에러 메시지 상수 (magic string 방지)
-# ─────────────────────────────────────────────────────────────────
 ERR_MISSING_PARAMS    = "flag, yyyy, flagdate 파라미터가 필요합니다."
 ERR_INVALID_FLAG      = "flag 값은 M / W / D 중 하나여야 합니다."
 ERR_DATE_PARSE        = "flagdate 로 날짜 범위를 계산할 수 없습니다."
@@ -41,10 +37,6 @@ VALID_FLAGS: set = {"M", "W", "D"}
 # 페이지 뷰
 # ─────────────────────────────────────────────────────────────────
 def index(request):
-    """
-    메인 대시보드 페이지.
-    sidebar 초기 옵션을 context 로 전달한다.
-    """
     filter_options = {
         "lines":       _get_distinct("line"),
         "sdwt_prods":  _get_distinct("sdwt_prod"),
@@ -52,16 +44,13 @@ def index(request):
         "eqp_ids":     _get_distinct("eqp_id"),
         "param_types": _get_distinct("param_type"),
     }
-    # page_context 선택지도 template 에 전달
     context = {
         "filter_options": filter_options,
-        "page_contexts":  sorted(VALID_PAGE_CONTEXTS),
     }
     return render(request, "spotfire_ai/index.html", context)
 
 
 def _get_distinct(field: str) -> list:
-    """Report 테이블에서 특정 컬럼의 distinct 값 목록 반환"""
     return list(
         SpotfireReport.objects
         .exclude(**{field: ""})
@@ -76,7 +65,6 @@ def _get_distinct(field: str) -> list:
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_report_data(request):
-    """GET /spotfire-ai/api/report-data/"""
     filters     = parse_sidebar_filters(request.GET)
     rank_limits = parse_rank_limits(request.GET)
     y_field     = request.GET.get("y_field", "cnt")
@@ -89,7 +77,6 @@ def api_report_data(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_click_detail(request):
-    """GET /spotfire-ai/api/click-detail/?flag=M&yyyy=2024&flagdate=M01"""
     flag     = request.GET.get("flag",     "").strip().upper()
     yyyy     = request.GET.get("yyyy",     "").strip()
     flagdate = request.GET.get("flagdate", "").strip()
@@ -122,7 +109,6 @@ def api_click_detail(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_filter_options(request):
-    """GET /spotfire-ai/api/filter-options/"""
     return JsonResponse({"ok": True, "data": {
         "lines":       _get_distinct("line"),
         "sdwt_prods":  _get_distinct("sdwt_prod"),
@@ -135,33 +121,16 @@ def api_filter_options(request):
 # ─────────────────────────────────────────────────────────────────
 # API: ask-ai  (AI Copilot)
 # ─────────────────────────────────────────────────────────────────
-@csrf_exempt   # JS fetch 에서 CSRF 토큰을 헤더로 전달 (X-CSRFToken)
+@csrf_exempt
 @require_POST
 def api_ask_ai(request):
     """
     POST /spotfire-ai/api/ask-ai/
 
-    request body (JSON):
-        {
-            "question":        "EQP-001 의 interlock 발생 상위 설비는?",
-            "page_context":    "interlock",
-            "selected_bar":    {"flag": "M", "yyyy": "2024", "flagdate": "M01"},
-            "sidebar_filters": {"line": ["L1"], "param_type": ["interlock"]}
-        }
-
-    성공 응답:
-        {
-            "ok": true,
-            "data": {
-                "answer":          "분석 결과: ...",
-                "result_count":    10,
-                "results_preview": [...],
-                "query_json":      {...}
-            }
-        }
-
-    실패 응답:
-        {"ok": false, "error": "에러 메시지"}
+    디버깅 팁:
+      - Django 로그(DEBUG 레벨)에서 "[AI] query_json" 을 검색하면
+        LLM 이 생성한 쿼리 전체를 확인할 수 있다.
+      - 에러 시 "[AI] 실패" 로그에서 어떤 테이블/필터가 문제였는지 확인 가능.
     """
     # ── body 파싱 ─────────────────────────────────────────────
     try:
@@ -169,28 +138,48 @@ def api_ask_ai(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"ok": False, "error": ERR_INVALID_JSON_BODY}, status=400)
 
-    # ── 필수 파라미터 추출 ────────────────────────────────────
-    question = (body.get("question") or "").strip()
+    question        = (body.get("question") or "").strip()
+    page_context    = (body.get("page_context") or "interlock").strip()
+    selected_bar    = body.get("selected_bar")  or None
+    sidebar_filters = body.get("sidebar_filters") or {}
+
     if not question:
         return JsonResponse({"ok": False, "error": ERR_MISSING_QUESTION}, status=400)
 
-    # ── 선택 파라미터 추출 ────────────────────────────────────
-    # page_context: "interlock" | "stoploss" | "down_history"
-    page_context    = (body.get("page_context") or "interlock").strip()
-    # selected_bar: {"flag", "yyyy", "flagdate"} or None
-    selected_bar    = body.get("selected_bar")  or None
-    # sidebar_filters: {"line": [...], ...}
-    sidebar_filters = body.get("sidebar_filters") or {}
-
+    # ── 요청 정보 로깅 ────────────────────────────────────────
     logger.info(
-        "ask-ai | question=%r | ctx=%s | bar=%s",
-        question[:50], page_context, selected_bar
+        "[AI] 요청 | question=%r | page_context=%s | selected_bar=%s | sidebar_filters=%s",
+        question[:80], page_context, selected_bar, sidebar_filters,
     )
 
-    # ── 서비스 호출 ───────────────────────────────────────────
-    result = ask_ai(question, page_context, selected_bar, sidebar_filters)
+    # ── filter_options: DB 실제 값 목록을 LLM context 에 전달 ──
+    # LLM 이 "백호" 같은 자연어를 올바른 필드(sdwt_prod 등)에 매핑하기 위해
+    # DB 에 존재하는 실제 값 목록을 함께 넘긴다.
+    filter_options = {
+        "lines":       _get_distinct("line"),
+        "sdwt_prods":  _get_distinct("sdwt_prod"),
+        "eqp_models":  _get_distinct("eqp_model"),
+        "param_types": _get_distinct("param_type"),
+    }
 
+    # ── 서비스 호출 ───────────────────────────────────────────
+    result = ask_ai(question, page_context, selected_bar, sidebar_filters, filter_options)
+
+    # ── 결과 로깅 (성공/실패 모두) ────────────────────────────
     if result["ok"]:
+        query_json = result["data"].get("query_json", {})
+        logger.info(
+            "[AI] 성공 | table=%s | filters=%s | group_by=%s | aggregations=%s | limit=%s",
+            query_json.get("table"),
+            query_json.get("filters"),
+            query_json.get("group_by"),
+            query_json.get("aggregations"),
+            query_json.get("limit"),
+        )
         return JsonResponse({"ok": True, "data": result["data"]})
     else:
+        logger.error(
+            "[AI] 실패 | error=%s",
+            result["error"],
+        )
         return JsonResponse({"ok": False, "error": result["error"]}, status=400)
