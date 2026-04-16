@@ -1251,3 +1251,76 @@ html[data-theme="dark"] .sf-table tbody tr:nth-child(even) td { background: rgba
 /* ─── 17. 유틸 ───────────────────────────────────────────────── */
 .w-100 { width: 100%; }
 .mt-1  { margin-top: 6px; }
+
+/* ─── 18. Stoploss 전용 스타일 ───────────────────────────────── */
+
+/* Y Mode 토글 */
+.sf-ymode-toggle {
+  display: flex;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  overflow: hidden;
+}
+
+.sf-ymode-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  background: var(--sf-surface);
+  color: var(--sf-text-muted);
+  border: none;
+  cursor: pointer;
+  transition: background var(--sf-transition), color var(--sf-transition);
+  white-space: nowrap;
+}
+
+.sf-ymode-btn + .sf-ymode-btn {
+  border-left: 1px solid var(--sf-border);
+}
+
+.sf-ymode-btn--active {
+  background: var(--sf-primary-soft);
+  color: var(--sf-primary);
+  font-weight: 600;
+}
+
+.sf-ymode-btn:hover:not(.sf-ymode-btn--active) {
+  background: var(--sf-surface-2);
+  color: var(--sf-text);
+}
+
+/* Ratio Analysis 패널 */
+.sf-ratio-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 2px 8px;
+  border-bottom: 1px solid var(--sf-border);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.sf-ratio-desc {
+  font-size: 11px;
+  color: var(--sf-text-muted);
+}
+
+#ratioPanel {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sf-ratio-table td.pct-high {
+  color: var(--sf-danger, #ef4444);
+  font-weight: 600;
+}
+
+.sf-ratio-table td.pct-mid {
+  color: var(--sf-warning, #f59e0b);
+  font-weight: 600;
+}

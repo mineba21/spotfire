@@ -17,7 +17,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from spotfire_ai.models import SpotfireReport
-from spotfire_ai.services.filter_service import parse_sidebar_filters
+from spotfire_ai.services.filter_service import parse_sidebar_filters, build_filter_q
 from spotfire_ai.services.chart_service  import get_chart_data, parse_rank_limits
 from spotfire_ai.services.detail_service import get_raw_detail
 from spotfire_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
@@ -109,12 +109,39 @@ def api_click_detail(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_filter_options(request):
+    """
+    GET /spotfire-ai/api/filter-options/
+
+    사이드바 선택값을 GET 파라미터로 받아
+    해당 조건으로 필터링된 distinct 목록을 반환한다.
+
+    예) ?line=L1&eqp_model=MODEL-X
+        → line='L1' AND eqp_model='MODEL-X' 조건 하에
+          각 컬럼의 distinct 값 반환
+
+    rank 파라미터(m_rank/w_rank/d_rank)는 무시한다.
+    """
+    # FILTER_FIELDS 에 해당하는 파라미터만 읽어 Q 객체 생성
+    # parse_sidebar_filters 는 ALL 값·미선택을 빈 리스트로 정규화해 준다
+    filters = parse_sidebar_filters(request.GET)
+    q       = build_filter_q(filters)
+
+    def _filtered_distinct(field: str) -> list:
+        return list(
+            SpotfireReport.objects
+            .filter(q)
+            .exclude(**{field: ""})
+            .values_list(field, flat=True)
+            .distinct()
+            .order_by(field)
+        )
+
     return JsonResponse({"ok": True, "data": {
-        "lines":       _get_distinct("line"),
-        "sdwt_prods":  _get_distinct("sdwt_prod"),
-        "eqp_models":  _get_distinct("eqp_model"),
-        "eqp_ids":     _get_distinct("eqp_id"),
-        "param_types": _get_distinct("param_type"),
+        "lines":       _filtered_distinct("line"),
+        "sdwt_prods":  _filtered_distinct("sdwt_prod"),
+        "eqp_models":  _filtered_distinct("eqp_model"),
+        "eqp_ids":     _filtered_distinct("eqp_id"),
+        "param_types": _filtered_distinct("param_type"),
     }})
 
 

@@ -1,7 +1,7 @@
 /**
- * dashboard.js
+ * stoploss_ai/dashboard.js
  *
- * 역할: Spotfire Report 대시보드의 모든 클라이언트 로직
+ * 역할: 설비 정지로스 현황 대시보드의 모든 클라이언트 로직
  *
  * 구조:
  *   1.  상수
@@ -11,11 +11,13 @@
  *   5.  Report Data fetch → M/W/D chart
  *   6.  Chart 렌더링 (Plotly bar)
  *   7.  Bar 클릭 핸들러
- *   8.  Click Detail fetch → raw table / top panel
- *   9.  Detail 패널 렌더링 (Rawdata / Top Show)
+ *   8.  Click Detail fetch → raw table / top panel / ratio panel
+ *   9.  Detail 패널 렌더링 (Rawdata / Top Show / Ratio Analysis)
  *  10.  Sidebar / UI 유틸
  *  11.  에러 / 토스트 유틸
  *  12.  AI Copilot
+ *  13.  차트 캡처
+ *  14.  Raw Data Excel 다운로드
  */
 
 "use strict";
@@ -24,10 +26,10 @@
 // 1. 상수
 // ═══════════════════════════════════════════════════════════════
 
-const URLS       = window.SF_URLS || {};
-const ALL_VALUE  = "ALL";
+const URLS        = window.SF_URLS || {};
+const ALL_VALUE   = "ALL";
 const VALID_FLAGS = ["M", "W", "D"];
-const CHART_IDS  = { M: "chartM", W: "chartW", D: "chartD" };
+const CHART_IDS   = { M: "chartM", W: "chartW", D: "chartD" };
 const COLORS = [
   "#6366f1", "#06b6d4", "#10b981", "#f59e0b",
   "#ef4444", "#8b5cf6", "#ec4899", "#3b82f6",
@@ -36,43 +38,27 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
-// param_type DB 값 → 표시 레이블 매핑
-// DB 값(A/E/T/M)은 필터 전송 시 그대로 사용하고, 화면 표시만 변환한다.
-const PARAM_TYPE_LABEL = { A: "Alarm", E: "ERD", T: "Trace", M: "MCC" };
-
-/** param_type DB 값을 표시 레이블로 변환. 매핑 없으면 원래 값 반환. */
-function ptLabel(v) {
-  return PARAM_TYPE_LABEL[v] ?? v;
-}
-
 /**
- * Top Show 그룹화 기준 컬럼 목록 (고정)
- * Raw 테이블은 이벤트 로그이므로 숫자 컬럼 대신
- * 이 목록으로 드롭다운을 구성하고 건수(cnt)를 JS 에서 직접 집계한다.
- *
- * 집계 계층:
- *   line                              → 라인별
- *   line + eqp_id                     → 라인+설비별
- *   line + eqp_id + param_type        → 라인+설비+파라미터유형별
- *   line + eqp_id + param_type + param_name → 전체 4단계
+ * Top Show 그룹화 기준 컬럼 목록
+ * stoploss의 eqp_loss_tpm 테이블 컬럼 기준 (loss_time 집계 포함)
  */
 const TOP_GROUP_OPTIONS = [
-  { value: "line",                                    label: "Line"                              },
-  { value: "line,eqp_id",                             label: "Line + EQP ID"                     },
-  { value: "line,eqp_id,param_type",                  label: "Line + EQP ID + Param Type"        },
-  { value: "line,eqp_id,param_type,param_name",       label: "Line + EQP ID + Param Type + Param Name" },
-  { value: "eqp_id",                                  label: "EQP ID"                            },
-  { value: "eqp_id,param_type",                       label: "EQP ID + Param Type"               },
-  { value: "eqp_id,param_type,param_name",            label: "EQP ID + Param Type + Param Name"  },
-  { value: "param_type",                              label: "Param Type"                        },
-  { value: "param_type,param_name",                   label: "Param Type + Param Name"           },
-  { value: "param_name",                              label: "Param Name"                        },
+  { value: "line",                                          label: "Line"                                    },
+  { value: "line,eqp_id",                                   label: "Line + EQP ID"                           },
+  { value: "line,eqp_id,param_type",                        label: "Line + EQP ID + Param Type"              },
+  { value: "line,eqp_id,param_type,param_name",             label: "Line + EQP ID + Param Type + Param Name" },
+  { value: "eqp_id",                                        label: "EQP ID"                                  },
+  { value: "eqp_id,param_type",                             label: "EQP ID + Param Type"                     },
+  { value: "eqp_id,param_type,param_name",                  label: "EQP ID + Param Type + Param Name"        },
+  { value: "param_type",                                    label: "Param Type"                              },
+  { value: "param_type,param_name",                         label: "Param Type + Param Name"                 },
+  { value: "param_name",                                    label: "Param Name"                              },
 ];
 
 const MSG = {
-  MISSING_BAR : "bar 를 먼저 클릭하세요.",
-  NET_ERROR   : (msg) => `네트워크 오류: ${msg}`,
-  API_ERROR   : (msg) => `API 오류: ${msg}`,
+  MISSING_BAR: "bar 를 먼저 클릭하세요.",
+  NET_ERROR:   (msg) => `네트워크 오류: ${msg}`,
+  API_ERROR:   (msg) => `API 오류: ${msg}`,
 };
 
 
@@ -89,8 +75,12 @@ const state = {
   rawRows: [],
   /** @type {string[]} */
   rawColumns: [],
-  /** @type {"raw" | "top"} */
+  /** @type {object[]} */
+  ratioRows: [],
+  /** @type {"raw" | "top" | "ratio"} */
   detailMode: "raw",
+  /** @type {"min" | "pct"} */
+  yMode: "min",
   copilot: { open: false },
 };
 
@@ -102,16 +92,10 @@ const state = {
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
 
-  // Top Show 드롭다운 초기 구성 + 이벤트 등록 (내부에서 null 체크 포함)
   _initTopGroupSelect();
-
-  // 페이지 초기 로딩 시 사이드바 param_type 옵션에 레이블 적용
-  _applyParamTypeLabels(document.getElementById("filterParamType"));
 
   fetchReportData();
 
-  // ── 헬퍼: null-safe addEventListener ──────────────────────
-  // getElementById 가 null 을 반환해도 이후 등록이 멈추지 않도록 방어한다.
   function on(id, event, handler) {
     const el = document.getElementById(id);
     if (el) {
@@ -125,7 +109,12 @@ document.addEventListener("DOMContentLoaded", () => {
   on("resetFilterBtn",    "click",  resetFilters);
   on("yFieldSelect",      "change", fetchReportData);
 
-  // 필터 select 변경 시 옵션 동적 갱신 (차트 자동 새로고침 없음)
+  // Y Mode 토글 버튼
+  document.querySelectorAll(".sf-ymode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setYMode(btn.dataset.mode));
+  });
+
+  // 필터 select 변경 시 옵션 동적 갱신
   ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
     .forEach((id) => on(id, "change", refreshFilterOptions));
 
@@ -133,19 +122,17 @@ document.addEventListener("DOMContentLoaded", () => {
     radio.addEventListener("change", onDetailModeChange);
   });
 
-  // topGroupSelect / topNInput 은 _initTopGroupSelect() 내부에서 등록됨
+  on("contextClearBtn",    "click",  clearSelectedBar);
+  on("sidebarCollapseBtn", "click",  () => toggleSidebar(false));
+  on("sidebarToggleBtn",   "click",  () => toggleSidebar(true));
+  on("themeToggleBtn",     "click",  toggleTheme);
 
-  on("contextClearBtn",   "click",  clearSelectedBar);
-  on("sidebarCollapseBtn","click",  () => toggleSidebar(false));
-  on("sidebarToggleBtn",  "click",  () => toggleSidebar(true));
-  on("themeToggleBtn",    "click",  toggleTheme);
-
-  on("copilotToggleBtn",  "click",  () => toggleCopilot(true));
-  on("copilotCloseBtn",   "click",  () => toggleCopilot(false));
-  on("chartCaptureBtn",   "click",  captureTopChart);
-  on("rawExcelBtn",       "click",  downloadRawExcel);
-  on("aiSendBtn",         "click",  sendAiQuestion);
-  on("aiInput",           "keydown", (e) => {
+  on("copilotToggleBtn",   "click",  () => toggleCopilot(true));
+  on("copilotCloseBtn",    "click",  () => toggleCopilot(false));
+  on("chartCaptureBtn",    "click",  captureTopChart);
+  on("rawExcelBtn",        "click",  downloadRawExcel);
+  on("aiSendBtn",          "click",  sendAiQuestion);
+  on("aiInput",            "keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAiQuestion(); }
   });
 
@@ -162,18 +149,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
 /**
  * Top Show 그룹 선택 드롭다운을 TOP_GROUP_OPTIONS 로 초기 구성한다.
- * Raw 테이블에 숫자 컬럼이 없으므로 고정 그룹 옵션을 사용한다.
  */
 function _initTopGroupSelect() {
-  const select  = document.getElementById("topGroupSelect");
-  const topNEl  = document.getElementById("topNInput");
+  const select = document.getElementById("topGroupSelect");
+  const topNEl = document.getElementById("topNInput");
 
   if (!select) {
     console.warn("[dashboard] #topGroupSelect not found — Top Show will be unavailable");
     return;
   }
 
-  // 옵션 채우기
   select.innerHTML = "";
   TOP_GROUP_OPTIONS.forEach((opt) => {
     const el       = document.createElement("option");
@@ -182,10 +167,8 @@ function _initTopGroupSelect() {
     select.appendChild(el);
   });
 
-  // 기본값: Line + EQP ID (2단계)
   select.value = "line,eqp_id";
 
-  // 이벤트 등록 (DOMContentLoaded 에서 별도 등록하지 않음)
   select.addEventListener("change", renderDetailPanel);
   if (topNEl) topNEl.addEventListener("change", renderDetailPanel);
 }
@@ -212,10 +195,11 @@ function collectFilters() {
   addMultiSelect("filterEqpId",     "eqp_id");
   addMultiSelect("filterParamType", "param_type");
 
-  params.append("m_rank", document.getElementById("rankM").value || 999);
-  params.append("w_rank", document.getElementById("rankW").value || 999);
-  params.append("d_rank", document.getElementById("rankD").value || 999);
+  params.append("m_rank",  document.getElementById("rankM").value || 999);
+  params.append("w_rank",  document.getElementById("rankW").value || 999);
+  params.append("d_rank",  document.getElementById("rankD").value || 999);
   params.append("y_field", document.getElementById("yFieldSelect").value);
+  params.append("y_mode",  state.yMode);
 
   return params;
 }
@@ -240,16 +224,23 @@ function collectFiltersAsDict() {
   return result;
 }
 
-// ── 사이드바 선택 변경 시 필터 옵션 동적 갱신 ─────────────────────
+/**
+ * Y Mode (min / pct) 전환
+ */
+function setYMode(mode) {
+  state.yMode = mode;
+  document.querySelectorAll(".sf-ymode-btn").forEach((btn) => {
+    btn.classList.toggle("sf-ymode-btn--active", btn.dataset.mode === mode);
+  });
+  fetchReportData();
+}
 
 /**
  * 현재 선택된 필터 값을 백엔드에 보내 각 select의 옵션을 갱신한다.
- * 차트는 자동 새로고침하지 않는다 — Apply Filter 버튼으로만 갱신.
  */
 async function refreshFilterOptions() {
-  // 현재 선택값 → URLSearchParams
   const params  = new URLSearchParams();
-  const filters = collectFiltersAsDict();      // ALL 제외된 선택값 dict
+  const filters = collectFiltersAsDict();
 
   for (const [field, values] of Object.entries(filters)) {
     for (const v of values) {
@@ -265,10 +256,9 @@ async function refreshFilterOptions() {
     if (!json.ok) return;
     data = json.data;
   } catch {
-    return;   // 네트워크 오류 시 조용히 무시
+    return;
   }
 
-  // 각 select 의 옵션을 새 목록으로 교체
   _rebuildSelect("filterLine",      data.lines,       "line");
   _rebuildSelect("filterSdwtProd",  data.sdwt_prods,  "sdwt_prod");
   _rebuildSelect("filterEqpModel",  data.eqp_models,  "eqp_model");
@@ -276,41 +266,17 @@ async function refreshFilterOptions() {
   _rebuildSelect("filterParamType", data.param_types, "param_type");
 }
 
-/**
- * <select id=selectId> 의 옵션을 newValues 로 재구성한다.
- * - 첫 번째 옵션은 항상 ALL
- * - 이전 선택값이 새 목록에 없으면 ALL 로 변경
- */
-/**
- * 초기 렌더링된 filterParamType select 의 option 텍스트를
- * PARAM_TYPE_LABEL 로 교체한다. (value 는 DB 값 그대로 유지)
- */
-function _applyParamTypeLabels(el) {
-  if (!el) return;
-  Array.from(el.options).forEach((opt) => {
-    if (opt.value !== ALL_VALUE) {
-      opt.textContent = ptLabel(opt.value);
-    }
-  });
-}
-
 function _rebuildSelect(selectId, newValues, fieldName) {
   const el = document.getElementById(selectId);
   if (!el || !Array.isArray(newValues)) return;
 
-  // 현재 선택값 저장
   const prevSelected = new Set(
     Array.from(el.selectedOptions).map((o) => o.value).filter((v) => v !== ALL_VALUE)
   );
 
-  // param_type select 는 레이블로 표시, value 는 DB 값 유지
-  const labelFn = (selectId === "filterParamType") ? ptLabel : (v) => v;
-
-  // 옵션 재구성
   el.innerHTML = `<option value="${ALL_VALUE}">ALL</option>` +
-    newValues.map((v) => `<option value="${v}">${labelFn(v)}</option>`).join("");
+    newValues.map((v) => `<option value="${v}">${v}</option>`).join("");
 
-  // 이전 선택값 복원 (새 목록에 있는 것만)
   let restored = 0;
   Array.from(el.options).forEach((o) => {
     if (prevSelected.has(o.value)) {
@@ -319,7 +285,6 @@ function _rebuildSelect(selectId, newValues, fieldName) {
     }
   });
 
-  // 복원된 값이 없으면 ALL 선택
   if (restored === 0) {
     el.options[0].selected = true;
   }
@@ -336,7 +301,10 @@ function resetFilters() {
   document.getElementById("rankM").value        = 3;
   document.getElementById("rankW").value        = 3;
   document.getElementById("rankD").value        = 7;
-  document.getElementById("yFieldSelect").value = "cnt";
+  document.getElementById("yFieldSelect").value = "stoploss";
+
+  // y_mode 리셋
+  setYMode("min");
 
   fetchReportData();
 }
@@ -392,25 +360,33 @@ function renderBarChart(flag, data) {
 
   const { flagdates, series } = data;
 
+  const yMode  = state.yMode;
+  const yField = document.getElementById("yFieldSelect").value;
+
   const traces = series.map((s, idx) => ({
     type:          "bar",
-    name:          ptLabel(s.name),
+    name:          s.name,
     x:             flagdates,
     y:             s.y,
     marker:        { color: COLORS[idx % COLORS.length] },
-    hovertemplate: "<b>%{x}</b><br>%{y:,.0f}<extra>%{fullData.name}</extra>",
+    hovertemplate: yMode === "pct"
+      ? "<b>%{x}</b><br>%{y:.2f}%<extra>%{fullData.name}</extra>"
+      : "<b>%{x}</b><br>%{y:,.1f} min<extra>%{fullData.name}</extra>",
   }));
 
-  const yLabel    = document.getElementById("yFieldSelect").value;
+  const yAxisLabel = yMode === "pct"
+    ? `${yField} 정지율 (%)`
+    : `${yField} (min)`;
+
   const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
   const fontColor = isDark ? "#94a3b8" : "#64748b";
   const hoverBg   = isDark ? "#1e293b" : "#0f172a";
 
   const layout = {
     barmode: "group",
-    margin:  { t: 8, b: 56, l: 46, r: 8 },
+    margin:  { t: 8, b: 56, l: 50, r: 8 },
     xaxis:   { tickangle: -30, automargin: true, fixedrange: true },
-    yaxis:   { title: { text: yLabel, font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis:   { title: { text: yAxisLabel, font: { size: 11 } }, automargin: true, fixedrange: true },
     legend:  { orientation: "h", y: -0.28, font: { size: 10 } },
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
@@ -456,6 +432,7 @@ function clearSelectedBar() {
   state.selectedBar = null;
   state.rawRows     = [];
   state.rawColumns  = [];
+  state.ratioRows   = [];
 
   document.getElementById("contextBar").style.display = "none";
   document.getElementById("sfDetail").style.display   = "none";
@@ -491,6 +468,7 @@ async function fetchClickDetail() {
 
     state.rawRows    = json.data.rows    || [];
     state.rawColumns = json.data.columns || [];
+    state.ratioRows  = json.data.ratio   || [];
 
     const countEl = document.getElementById("detailCount");
     if (countEl) {
@@ -508,29 +486,31 @@ async function fetchClickDetail() {
 
 
 // ═══════════════════════════════════════════════════════════════
-// 9. Detail 패널 렌더링 (Rawdata Show / Top Show)
+// 9. Detail 패널 렌더링 (Rawdata / Top Show / Ratio Analysis)
 // ═══════════════════════════════════════════════════════════════
 
 function renderDetailPanel() {
-  const isRaw = (state.detailMode === "raw");
+  const mode = state.detailMode;
 
-  document.getElementById("rawDataPanel").style.display    = isRaw ? "block" : "none";
-  document.getElementById("topDataPanel").style.display    = isRaw ? "none"  : "block";
-  document.getElementById("topOptions").style.display      = isRaw ? "none"  : "flex";
+  document.getElementById("rawDataPanel").style.display = mode === "raw"   ? "block" : "none";
+  document.getElementById("topDataPanel").style.display = mode === "top"   ? "block" : "none";
+  document.getElementById("ratioPanel").style.display   = mode === "ratio" ? "block" : "none";
+  document.getElementById("topOptions").style.display   = mode === "top"   ? "flex"  : "none";
 
   const captureBtn = document.getElementById("chartCaptureBtn");
-  if (captureBtn) captureBtn.style.display = isRaw ? "none" : "inline-flex";
+  if (captureBtn) captureBtn.style.display = mode === "top" ? "inline-flex" : "none";
 
-  if (isRaw) {
-    renderRawTable();
-  } else {
-    renderTopPanel();
-  }
+  const rawExcelBtn = document.getElementById("rawExcelBtn");
+  if (rawExcelBtn) rawExcelBtn.style.display = mode === "raw" ? "inline-flex" : "none";
+
+  if (mode === "raw")        renderRawTable();
+  else if (mode === "top")   renderTopPanel();
+  else if (mode === "ratio") renderRatioPanel();
 }
 
 function onDetailModeChange(e) {
   state.detailMode = e.target.value;
-  if (state.rawRows.length) renderDetailPanel();
+  if (state.rawRows.length || state.ratioRows.length) renderDetailPanel();
 }
 
 // ── Rawdata Show ──────────────────────────────────────────────
@@ -566,9 +546,7 @@ function renderRawTable() {
     state.rawColumns.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-      td.textContent = (val != null)
-        ? (col === "param_type" ? ptLabel(String(val)) : val)
-        : "";
+      td.textContent = (val != null) ? val : "";
       if (typeof val === "number") td.style.textAlign = "right";
       tr.appendChild(td);
     });
@@ -587,20 +565,10 @@ function renderRawTable() {
   }
 }
 
-// ── Top Show (cnt 기반 그룹 집계) ────────────────────────────
+// ── Top Show (loss_time 기반 그룹 집계) ──────────────────────
 
 /**
- * state.rawRows 를 JS 에서 직접 그룹별 카운팅해 Top-N 차트 + 테이블을 렌더링한다.
- *
- * Raw 테이블은 이벤트 로그이므로 숫자 측정 컬럼이 없다.
- * 대신 topGroupSelect 에서 선택한 컬럼 조합으로 group_by 하고
- * 행 수를 cnt 로 집계한다.
- *
- * 흐름:
- *   1. topGroupSelect.value ("line,eqp_id" 등) 파싱 → groupCols 배열
- *   2. state.rawRows 를 groupCols 기준으로 Map 집계 → { key: cnt }
- *   3. cnt 내림차순 정렬 → 상위 topN 추출
- *   4. Plotly 수평 bar + 순위 테이블 렌더링
+ * state.rawRows 를 JS 에서 직접 그룹별 loss_time 합산해 Top-N 차트 + 테이블을 렌더링한다.
  */
 function renderTopPanel() {
   if (!state.rawRows.length) return;
@@ -609,26 +577,27 @@ function renderTopPanel() {
   const groupCols   = groupColStr.split(",").map((c) => c.trim()).filter(Boolean);
   const topN        = Math.max(1, parseInt(document.getElementById("topNInput").value, 10) || 10);
 
-  // ── 그룹별 cnt 집계 ──────────────────────────────────────
-  const cntMap = new Map(); // key(string) → { cols 값들, cnt }
+  // ── 그룹별 loss_time 합산 ─────────────────────────────────
+  const aggMap = new Map(); // key → { cols 값들, loss_time_sum, cnt }
 
   state.rawRows.forEach((row) => {
-    // 그룹 키: "L1|EQP-001" 형태 (구분자 | 사용)
-    const keyParts  = groupCols.map((col) => (row[col] != null ? String(row[col]) : ""));
-    const key       = keyParts.join("|");
+    const keyParts = groupCols.map((col) => (row[col] != null ? String(row[col]) : ""));
+    const key      = keyParts.join("|");
 
-    if (cntMap.has(key)) {
-      cntMap.get(key).cnt += 1;
+    if (aggMap.has(key)) {
+      const entry = aggMap.get(key);
+      entry.loss_time_sum += (row.loss_time || 0);
+      entry.cnt += 1;
     } else {
-      const entry = { cnt: 1 };
+      const entry = { loss_time_sum: (row.loss_time || 0), cnt: 1 };
       groupCols.forEach((col) => { entry[col] = row[col] != null ? String(row[col]) : ""; });
-      cntMap.set(key, entry);
+      aggMap.set(key, entry);
     }
   });
 
-  // ── cnt 내림차순 정렬 → 상위 N 추출 ─────────────────────
-  const sorted = Array.from(cntMap.values())
-    .sort((a, b) => b.cnt - a.cnt)
+  // ── loss_time_sum 내림차순 정렬 → 상위 N 추출 ───────────
+  const sorted = Array.from(aggMap.values())
+    .sort((a, b) => b.loss_time_sum - a.loss_time_sum)
     .slice(0, topN);
 
   if (!sorted.length) {
@@ -636,15 +605,11 @@ function renderTopPanel() {
     return;
   }
 
-  // ── y축 레이블: 그룹 컬럼 값들을 " / " 로 연결 ──────────
-  // param_type 컬럼은 표시 레이블로 변환
+  // ── y축 레이블 ─────────────────────────────────────────
   const yLabels = sorted.map((row) =>
-    groupCols.map((col) => {
-      const v = row[col] || "-";
-      return col === "param_type" ? ptLabel(v) : v;
-    }).join(" / ")
+    groupCols.map((col) => row[col] || "-").join(" / ")
   );
-  const xValues = sorted.map((row) => row.cnt);
+  const xValues = sorted.map((row) => Math.round(row.loss_time_sum * 10) / 10);
 
   // ── Plotly 수평 bar ─────────────────────────────────────
   const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
@@ -656,22 +621,22 @@ function renderTopPanel() {
     x:             xValues,
     y:             yLabels,
     marker:        { color: yLabels.map((_, i) => COLORS[i % COLORS.length]) },
-    text:          xValues.map((v) => v.toLocaleString()),
+    text:          xValues.map((v) => v.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " min"),
     textposition:  "auto",
-    hovertemplate: "<b>%{y}</b><br>발생 건수: %{x:,}<extra></extra>",
+    hovertemplate: "<b>%{y}</b><br>Loss: %{x:,.1f} min<extra></extra>",
   }];
 
   const layout = {
     margin:  { t: 8, b: 30, l: 160, r: 60 },
     xaxis: {
-      title:      { text: "발생 건수 (cnt)", font: { size: 11 } },
+      title:      { text: "Loss Time (min)", font: { size: 11 } },
       automargin: true,
       fixedrange: true,
     },
     yaxis: {
       automargin: true,
       fixedrange: true,
-      autorange:  "reversed",   // 1위가 맨 위
+      autorange:  "reversed",
     },
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
@@ -681,28 +646,22 @@ function renderTopPanel() {
 
   Plotly.react("chartTop", traces, layout, { responsive: true, displayModeBar: false });
 
-  // ── chartTop bar 클릭 → 해당 그룹 Rawdata 표시 ──────────
+  // chartTop bar 클릭 → 해당 그룹 Rawdata 표시
   const topEl = document.getElementById("chartTop");
   if (typeof topEl.removeAllListeners === "function") {
     topEl.removeAllListeners("plotly_click");
   }
   topEl.on("plotly_click", (eventData) => {
     if (!eventData?.points?.length) return;
-    const pointIdx  = eventData.points[0].pointIndex;
+    const pointIdx   = eventData.points[0].pointIndex;
     const clickedRow = sorted[pointIdx];
     if (clickedRow) onTopBarClick(clickedRow, groupCols);
   });
 
-  // ── 순위 테이블 ─────────────────────────────────────────
+  // 순위 테이블
   _renderTopTable(sorted, groupCols);
 }
 
-/**
- * Top Show 순위 테이블 렌더링.
- *
- * @param {object[]} rows       - cnt 내림차순 정렬된 집계 결과
- * @param {string[]} groupCols  - 그룹 기준 컬럼 목록
- */
 function _renderTopTable(rows, groupCols) {
   const thead = document.getElementById("topTableHead");
   const tbody = document.getElementById("topTableBody");
@@ -711,8 +670,8 @@ function _renderTopTable(rows, groupCols) {
 
   if (!rows.length) return;
 
-  // 헤더: # + 그룹 컬럼들 + cnt
-  const displayCols = [...groupCols, "cnt"];
+  // 헤더: # + 그룹 컬럼들 + loss_time_sum + cnt
+  const displayCols = [...groupCols, "loss_time_sum", "cnt"];
   const headerRow   = document.createElement("tr");
 
   const thRank       = document.createElement("th");
@@ -721,12 +680,13 @@ function _renderTopTable(rows, groupCols) {
 
   displayCols.forEach((col) => {
     const th = document.createElement("th");
-    th.textContent = col === "cnt" ? "발생 건수" : col;
+    if      (col === "loss_time_sum") th.textContent = "Loss (min)";
+    else if (col === "cnt")           th.textContent = "건수";
+    else                              th.textContent = col;
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
 
-  // 바디
   const fragment = document.createDocumentFragment();
   rows.forEach((row, idx) => {
     const tr = document.createElement("tr");
@@ -739,16 +699,18 @@ function _renderTopTable(rows, groupCols) {
     displayCols.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-      let display = "";
-      if (val != null) {
-        if (typeof val === "number")      display = val.toLocaleString();
-        else if (col === "param_type")    display = ptLabel(String(val));
-        else                              display = val;
-      }
-      td.textContent = display;
-      if (col === "cnt") {
+
+      if (col === "loss_time_sum") {
+        td.textContent = val != null
+          ? val.toLocaleString(undefined, { maximumFractionDigits: 1 })
+          : "0";
         td.style.textAlign = "right";
         td.classList.add("sf-highlight-cell");
+      } else if (col === "cnt") {
+        td.textContent     = val != null ? val.toLocaleString() : "0";
+        td.style.textAlign = "right";
+      } else {
+        td.textContent = val != null ? val : "";
       }
       tr.appendChild(td);
     });
@@ -758,20 +720,11 @@ function _renderTopTable(rows, groupCols) {
   tbody.appendChild(fragment);
 }
 
-/**
- * Top Show bar 클릭 핸들러.
- * 클릭된 그룹(groupCols 기준)에 해당하는 rawRows 를 필터링해 하단에 표시한다.
- *
- * @param {object}   clickedRow  - sorted 배열의 해당 항목 (groupCols 값 + cnt 포함)
- * @param {string[]} groupCols   - 현재 집계 기준 컬럼 목록
- */
 function onTopBarClick(clickedRow, groupCols) {
-  // 클릭된 그룹의 조건에 맞는 raw rows 필터링
   const filtered = state.rawRows.filter((row) =>
     groupCols.every((col) => String(row[col] ?? "") === String(clickedRow[col] ?? ""))
   );
 
-  // 배지 텍스트: "line=L1 / eqp_id=EQP-001" 형태
   const badgeText = groupCols
     .map((col) => `${col}=${clickedRow[col] || "-"}`)
     .join(" / ");
@@ -779,34 +732,25 @@ function onTopBarClick(clickedRow, groupCols) {
   _renderTopRaw(filtered, badgeText);
 }
 
-/**
- * Top Show 하단 Rawdata 패널 렌더링.
- *
- * @param {object[]} rows       - 필터링된 raw rows
- * @param {string}   badgeText  - 상단 배지에 표시할 그룹 설명
- */
 function _renderTopRaw(rows, badgeText) {
-  const panel    = document.getElementById("topRawPanel");
-  const badge    = document.getElementById("topRawBadge");
-  const countEl  = document.getElementById("topRawCount");
-  const thead    = document.getElementById("topRawTableHead");
-  const tbody    = document.getElementById("topRawTableBody");
+  const panel   = document.getElementById("topRawPanel");
+  const badge   = document.getElementById("topRawBadge");
+  const countEl = document.getElementById("topRawCount");
+  const thead   = document.getElementById("topRawTableHead");
+  const tbody   = document.getElementById("topRawTableBody");
 
   if (!panel) return;
 
-  // 데이터 없으면 패널 숨김
   if (!rows.length) {
     panel.style.display = "none";
     showToast("해당 그룹의 Raw 데이터가 없습니다.");
     return;
   }
 
-  // 배지 및 건수 표시
-  badge.textContent  = badgeText;
+  badge.textContent   = badgeText;
   countEl.textContent = `${rows.length.toLocaleString()}건`;
   panel.style.display = "block";
 
-  // 헤더
   thead.innerHTML = "";
   const columns   = state.rawColumns.length ? state.rawColumns : Object.keys(rows[0]);
   const headerRow = document.createElement("tr");
@@ -818,7 +762,6 @@ function _renderTopRaw(rows, badgeText) {
   });
   thead.appendChild(headerRow);
 
-  // 바디 (최대 500건)
   tbody.innerHTML = "";
   const fragment  = document.createDocumentFragment();
   const visible   = rows.slice(0, MAX_RENDER_ROWS);
@@ -836,7 +779,6 @@ function _renderTopRaw(rows, badgeText) {
   });
   tbody.appendChild(fragment);
 
-  // 행 수 초과 안내
   if (rows.length > MAX_RENDER_ROWS) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
@@ -848,12 +790,87 @@ function _renderTopRaw(rows, badgeText) {
   }
 }
 
-/**
- * Top Show Rawdata 패널 닫기.
- */
 function closeTopRaw() {
   const panel = document.getElementById("topRawPanel");
   if (panel) panel.style.display = "none";
+}
+
+// ── Ratio Analysis ─────────────────────────────────────────────
+
+/**
+ * state.ratioRows 를 Ratio Analysis 테이블로 렌더링한다.
+ *
+ * 컬럼: param_type, param_name, loss_time_min,
+ *        pct_vs_eqp, pct_vs_sdwt, pct_vs_model, pct_vs_line, pct_vs_total
+ */
+function renderRatioPanel() {
+  const thead   = document.getElementById("ratioTableHead");
+  const tbody   = document.getElementById("ratioTableBody");
+  const emptyEl = document.getElementById("ratioTableEmpty");
+
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  const rows = state.ratioRows || [];
+  if (!rows.length) {
+    if (emptyEl) emptyEl.style.display = "block";
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = "none";
+
+  const cols = [
+    { key: "param_type",    label: "Param Type"  },
+    { key: "param_name",    label: "Param Name"  },
+    { key: "loss_time_min", label: "Loss (min)"  },
+    { key: "pct_vs_eqp",   label: "vs EQP %"    },
+    { key: "pct_vs_sdwt",  label: "vs SDWT %"   },
+    { key: "pct_vs_model", label: "vs Model %"  },
+    { key: "pct_vs_line",  label: "vs Line %"   },
+    { key: "pct_vs_total", label: "vs Total %"  },
+  ];
+
+  // 헤더
+  const headerRow = document.createElement("tr");
+  cols.forEach((col) => {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+
+  // 바디
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    cols.forEach((col) => {
+      const td  = document.createElement("td");
+      const val = row[col.key];
+
+      if (col.key.startsWith("pct_")) {
+        if (val != null) {
+          td.textContent     = val.toFixed(2) + "%";
+          td.style.textAlign = "right";
+          if (val > 10)     td.classList.add("pct-high");
+          else if (val > 5) td.classList.add("pct-mid");
+        } else {
+          td.textContent     = "-";
+          td.style.textAlign = "right";
+          td.style.color     = "var(--sf-text-xmuted)";
+        }
+      } else if (col.key === "loss_time_min") {
+        td.textContent     = val != null
+          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 1 })
+          : "-";
+        td.style.textAlign = "right";
+      } else {
+        td.textContent = val != null ? val : "-";
+      }
+
+      tr.appendChild(td);
+    });
+    fragment.appendChild(tr);
+  });
+  tbody.appendChild(fragment);
 }
 
 function setDetailLoading(isLoading) {
@@ -1060,12 +1077,9 @@ async function sendAiQuestion() {
   const sendBtn = document.getElementById("aiSendBtn");
   if (sendBtn) sendBtn.disabled = true;
 
-  // page_context 드롭다운 제거 — 항상 "interlock" 기본값 사용
-  const pageContext = "interlock";
-
   const body = {
     question,
-    page_context:    pageContext,
+    page_context:    "stoploss",
     selected_bar:    state.selectedBar || null,
     sidebar_filters: collectFiltersAsDict(),
   };
@@ -1097,22 +1111,20 @@ async function sendAiQuestion() {
   }
 }
 
-// ── Section 13: 차트 캡처 ────────────────────────────────────────
 
-/**
- * Top Show 차트(#chartTop)를 PNG로 변환 → 클립보드에 복사한다.
- * Plotly.toImage() → Blob → navigator.clipboard.write() 순서로 처리.
- */
+// ═══════════════════════════════════════════════════════════════
+// 13. 차트 캡처
+// ═══════════════════════════════════════════════════════════════
+
 async function captureTopChart() {
-  const btn = document.getElementById("chartCaptureBtn");
+  const btn     = document.getElementById("chartCaptureBtn");
   const chartEl = document.getElementById("chartTop");
 
   if (!chartEl || !chartEl._fullLayout) {
-    showToast("캡처할 차트가 없습니다.", "warn");
+    showToast("캡처할 차트가 없습니다.");
     return;
   }
 
-  // 버튼 로딩 상태
   const origHTML = btn ? btn.innerHTML : "";
   if (btn) {
     btn.disabled = true;
@@ -1126,25 +1138,20 @@ async function captureTopChart() {
   }
 
   try {
-    // 1) Plotly → base64 dataURL (PNG)
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     const dataUrl = await Plotly.toImage("chartTop", {
-      format : "png",
-      width  : chartEl.offsetWidth  || 800,
-      height : chartEl.offsetHeight || 380,
-      scale  : 2,   // 고해상도
+      format: "png",
+      width:  chartEl.offsetWidth  || 800,
+      height: chartEl.offsetHeight || 380,
+      scale:  2,
     });
 
-    // 2) dataURL → Blob
     const res  = await fetch(dataUrl);
     const blob = await res.blob();
 
-    // 3) Clipboard API 로 복사
     if (!navigator.clipboard || !window.ClipboardItem) {
-      // 폴백: 다운로드
-      const a = document.createElement("a");
-      a.href     = dataUrl;
-      a.download = `chart_${Date.now()}.png`;
+      const a       = document.createElement("a");
+      a.href        = dataUrl;
+      a.download    = `chart_${Date.now()}.png`;
       a.click();
       showToast("클립보드 API 미지원 — 파일로 다운로드했습니다.");
       return;
@@ -1158,32 +1165,28 @@ async function captureTopChart() {
 
   } catch (err) {
     console.error("[captureTopChart]", err);
-    showToast(`캡처 실패: ${err.message}`, "error");
+    showToast(`캡처 실패: ${err.message}`);
   } finally {
     if (btn) {
-      btn.disabled = false;
+      btn.disabled  = false;
       btn.innerHTML = origHTML;
     }
   }
 }
 
-// ── Section 14: Raw Data Excel 다운로드 ──────────────────────────
 
-/**
- * state.rawRows 를 SheetJS 로 xlsx 파일로 변환해 다운로드한다.
- *
- * - 컬럼 순서: state.rawColumns (RAW_COLUMNS 기준)
- * - 파일명: rawdata_<flagdate>_<yyyymmdd>.xlsx
- * - 헤더 행에 배경색(인디고) + 볼드 스타일 적용
- */
+// ═══════════════════════════════════════════════════════════════
+// 14. Raw Data Excel 다운로드
+// ═══════════════════════════════════════════════════════════════
+
 function downloadRawExcel() {
   if (!state.rawRows || !state.rawRows.length) {
-    showToast("다운로드할 데이터가 없습니다.", "warn");
+    showToast("다운로드할 데이터가 없습니다.");
     return;
   }
 
   if (typeof XLSX === "undefined") {
-    showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.", "warn");
+    showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.");
     return;
   }
 
@@ -1196,20 +1199,15 @@ function downloadRawExcel() {
       ? state.rawColumns
       : Object.keys(state.rawRows[0]);
 
-    // ── 데이터 배열 구성 (헤더 + 행) ──────────────────────────
     const sheetData = [
-      columns,   // 헤더 행
+      columns,
       ...state.rawRows.map((row) =>
-        columns.map((col) => {
-          const val = row[col] ?? "";
-          return col === "param_type" ? ptLabel(String(val)) : val;
-        })
+        columns.map((col) => row[col] ?? "")
       ),
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
-    // ── 열 너비 자동 조정 ─────────────────────────────────────
     ws["!cols"] = columns.map((col) => {
       const maxLen = Math.max(
         col.length,
@@ -1218,7 +1216,6 @@ function downloadRawExcel() {
       return { wch: Math.min(maxLen + 2, 40) };
     });
 
-    // ── 헤더 셀 스타일 (볼드 + 배경색) ───────────────────────
     columns.forEach((_, ci) => {
       const cellAddr = XLSX.utils.encode_cell({ r: 0, c: ci });
       if (!ws[cellAddr]) return;
@@ -1229,17 +1226,15 @@ function downloadRawExcel() {
       };
     });
 
-    // ── Workbook 생성 및 다운로드 ─────────────────────────────
     const wb        = XLSX.utils.book_new();
     const sheetName = "RawData";
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
-    // 파일명: rawdata_<flag><flagdate>_YYYYMMDD_HHmmss.xlsx
     const bar      = state.selectedBar;
     const barLabel = bar ? `${bar.flag}${bar.flagdate.replace("/", "")}` : "all";
     const now      = new Date();
     const ts       = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
-    const fileName = `rawdata_${barLabel}_${ts}.xlsx`;
+    const fileName = `stoploss_rawdata_${barLabel}_${ts}.xlsx`;
 
     XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
 
@@ -1247,7 +1242,7 @@ function downloadRawExcel() {
 
   } catch (err) {
     console.error("[downloadRawExcel]", err);
-    showToast(`Excel 저장 실패: ${err.message}`, "error");
+    showToast(`Excel 저장 실패: ${err.message}`);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
   }

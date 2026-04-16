@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # spotfire 분석 앱
     'spotfire_ai',
+    # 정지로스 분석 앱
+    'stoploss_ai',
 ]
 
 MIDDLEWARE = [
@@ -109,6 +111,12 @@ DATABASES = {
     #     'PORT': os.environ.get('DB_PORT', '3306'),
     # },
 }
+
+# ─────────────────────────────────────────────────────────────────
+# LLM 백엔드 설정
+# 테스트 환경: "mock"  |  운영 환경: "openai" (OPENAI_API_KEY 필요)
+# ─────────────────────────────────────────────────────────────────
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "mock")
 
 
 # Password validation

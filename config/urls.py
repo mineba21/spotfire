@@ -12,4 +12,7 @@ urlpatterns = [
 
     # spotfire_ai 앱: /spotfire-ai/ 하위 모든 URL
     path("spotfire-ai/", include("spotfire_ai.urls")),
+
+    # stoploss_ai 앱: /stoploss-ai/ 하위 모든 URL
+    path("stoploss-ai/", include("stoploss_ai.urls")),
 ]

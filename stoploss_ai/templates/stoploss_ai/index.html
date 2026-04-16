@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spotfire Report — 생산/설비 이상 현황</title>
+  <title>설비 정지로스 현황</title>
 
   <script>
     (function() {
@@ -16,20 +16,18 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
-  <link rel="stylesheet" href="{% static 'spotfire_ai/css/dashboard.css' %}">
+  <link rel="stylesheet" href="{% static 'stoploss_ai/css/dashboard.css' %}">
   <style>
-    /* sf-detail 이 콘텐츠 크기만큼 늘어나고 sf-content 가 전체 스크롤을 담당 */
     .sf-content       { overflow-y: auto !important; }
     .sf-detail        { flex: none !important; overflow: visible !important; height: auto !important; }
     .sf-detail__body  { flex: none !important; overflow: visible !important; min-height: 0; }
     #rawDataPanel     { overflow: visible !important; }
     #topDataPanel     { overflow: visible !important; }
     #topRawPanel      { overflow: visible !important; }
-    /* rawdata 테이블 자체는 최대 높이 + 스크롤 유지 */
     #rawDataPanel .sf-table-wrapper { max-height: 500px; overflow-y: auto; }
     #topRawPanel  .sf-table-wrapper { max-height: 400px; overflow-y: auto; }
 
-    /* ── Page Tab Bar (하단, Spotfire 스타일) ── */
+    /* Page Tab Bar */
     .sf-pagetab-bar {
       flex-shrink: 0;
       height: 36px;
@@ -81,16 +79,75 @@
       border-bottom-color: var(--sf-surface);
     }
     .sf-pagetab--active svg { stroke: var(--sf-primary); }
+
+    /* Y Mode Toggle */
+    .sf-ymode-toggle {
+      display: flex;
+      border: 1px solid var(--sf-border);
+      border-radius: var(--sf-radius-sm);
+      overflow: hidden;
+    }
+    .sf-ymode-btn {
+      padding: 5px 12px;
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 500;
+      background: var(--sf-surface);
+      color: var(--sf-text-muted);
+      border: none;
+      cursor: pointer;
+      transition: background var(--sf-transition), color var(--sf-transition);
+    }
+    .sf-ymode-btn + .sf-ymode-btn {
+      border-left: 1px solid var(--sf-border);
+    }
+    .sf-ymode-btn--active {
+      background: var(--sf-primary-soft);
+      color: var(--sf-primary);
+      font-weight: 600;
+    }
+    .sf-ymode-btn:hover:not(.sf-ymode-btn--active) {
+      background: var(--sf-surface-2);
+      color: var(--sf-text);
+    }
+
+    /* Ratio Analysis */
+    .sf-ratio-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 2px 8px;
+      border-bottom: 1px solid var(--sf-border);
+      margin-bottom: 4px;
+      flex-shrink: 0;
+    }
+    .sf-ratio-desc {
+      font-size: 11px;
+      color: var(--sf-text-muted);
+    }
+    #ratioPanel {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    #ratioPanel .sf-table-wrapper {
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .sf-ratio-table td.pct-high { color: var(--sf-danger, #ef4444); font-weight: 600; }
+    .sf-ratio-table td.pct-mid  { color: var(--sf-warning, #f59e0b); font-weight: 600; }
   </style>
 
   <meta name="csrf-token" content="{{ csrf_token }}">
 
   <script>
     window.SF_URLS = {
-      reportData   : "{% url 'spotfire_ai:api_report_data' %}",
-      clickDetail  : "{% url 'spotfire_ai:api_click_detail' %}",
-      filterOptions: "{% url 'spotfire_ai:api_filter_options' %}",
-      askAi        : "{% url 'spotfire_ai:api_ask_ai' %}",
+      reportData   : "{% url 'stoploss_ai:api_report_data' %}",
+      clickDetail  : "{% url 'stoploss_ai:api_click_detail' %}",
+      filterOptions: "{% url 'stoploss_ai:api_filter_options' %}",
+      askAi        : "{% url 'stoploss_ai:api_ask_ai' %}",
     };
   </script>
 </head>
@@ -98,7 +155,7 @@
 <body class="sf-body">
 <div class="sf-layout" id="sfLayout">
 
-  {% include "spotfire_ai/partials/sidebar.html" %}
+  {% include "stoploss_ai/partials/sidebar.html" %}
 
   <main class="sf-main" id="sfMain">
 
@@ -111,15 +168,27 @@
         </button>
         <div class="sf-topbar__brand">
           <span class="sf-topbar__logo">⬡</span>
-          <h1 class="sf-topbar__title">생산/설비 이상 현황</h1>
+          <h1 class="sf-topbar__title">설비 정지로스 현황</h1>
         </div>
       </div>
       <div class="sf-topbar__right">
+        <!-- Y축 토글 (min / %) -->
         <div class="sf-topbar__control">
           <span class="sf-topbar__label">Y축</span>
+          <div class="sf-ymode-toggle" id="ymodeToggle">
+            <button class="sf-ymode-btn sf-ymode-btn--active" data-mode="min">min</button>
+            <button class="sf-ymode-btn" data-mode="pct">%</button>
+          </div>
+        </div>
+
+        <!-- 로스 유형 선택 -->
+        <div class="sf-topbar__control">
+          <span class="sf-topbar__label">로스 유형</span>
           <select id="yFieldSelect" class="sf-select-sm">
-            <option value="cnt" selected>Count</option>
-            <option value="ratio">Ratio (%)</option>
+            <option value="stoploss">Total</option>
+            <option value="pm">PM</option>
+            <option value="qual">QUAL</option>
+            <option value="bm">BM</option>
           </select>
         </div>
 
@@ -200,23 +269,25 @@
               <span class="sf-radio-indicator"></span>
               Top Show
             </label>
+            <label class="sf-radio-label">
+              <input type="radio" name="detailMode" value="ratio">
+              <span class="sf-radio-indicator"></span>
+              Ratio Analysis
+            </label>
           </div>
 
-          <!-- ▼▼▼ 변경: topFieldSelect → topGroupSelect (고정 그룹 옵션, JS에서 동적 채움) ▼▼▼ -->
           <div class="sf-top-options" id="topOptions" style="display:none;">
             <span class="sf-topbar__label">집계 기준</span>
             <select id="topGroupSelect" class="sf-select-sm" style="min-width:240px;">
-              <!-- dashboard.js _initTopGroupSelect() 에서 DOMContentLoaded 시 옵션이 채워짐 -->
+              <!-- dashboard.js _initTopGroupSelect() 에서 채워짐 -->
             </select>
             <span class="sf-topbar__label">Top N</span>
             <input type="number" id="topNInput" class="sf-input-sm"
                    value="10" min="1" max="200" style="width:60px;">
           </div>
-          <!-- ▲▲▲ 변경 끝 ▲▲▲ -->
 
           <span class="sf-detail__count" id="detailCount"></span>
 
-          <!-- 캡처 버튼: Top Show 모드일 때만 표시 -->
           <button class="sf-capture-btn" id="chartCaptureBtn" title="차트를 클립보드에 복사" style="display:none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="9" y="2" width="6" height="4" rx="1"/>
@@ -233,9 +304,11 @@
         </div>
 
         <div class="sf-detail__body" id="detailBody">
+
+          <!-- Raw Data 패널 -->
           <div id="rawDataPanel">
             <div class="sf-rawpanel-header">
-              <span class="sf-rawpanel-header__title">Raw Data</span>
+              <span class="sf-rawpanel-header__title">Loss Event Data</span>
               <button class="sf-excel-btn" id="rawExcelBtn" title="Excel 다운로드">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -260,6 +333,8 @@
               </div>
             </div>
           </div>
+
+          <!-- Top Show 패널 -->
           <div id="topDataPanel" style="display:none;">
             <div class="sf-top-layout" style="height:360px;">
               <div class="sf-top-layout__chart">
@@ -275,7 +350,7 @@
               </div>
             </div>
 
-            <!-- ▼ Top Show bar 클릭 시 해당 그룹의 Rawdata 표시 -->
+            <!-- Top Show bar 클릭 시 Raw Data 표시 -->
             <div id="topRawPanel" style="display:none; margin-top:12px;">
               <div style="display:flex; align-items:center; gap:10px; padding:6px 0 8px; border-top:1px solid var(--sf-border); margin-top:4px;">
                 <span style="font-size:11px; font-weight:600; color:var(--sf-text-muted); text-transform:uppercase; letter-spacing:.06em;">Raw Data</span>
@@ -291,21 +366,41 @@
               </div>
             </div>
           </div>
+
+          <!-- Ratio Analysis 패널 -->
+          <div id="ratioPanel" style="display:none;">
+            <div class="sf-ratio-header">
+              <span class="sf-rawpanel-header__title">인터락 기여도 분석</span>
+              <span class="sf-ratio-desc">각 인터락(param_type / param_name)이 전체 정지로스에서 차지하는 비율</span>
+            </div>
+            <div class="sf-table-wrapper">
+              <table class="sf-table sf-ratio-table" id="ratioTable">
+                <thead id="ratioTableHead"></thead>
+                <tbody id="ratioTableBody"></tbody>
+              </table>
+              <div class="sf-table-empty" id="ratioTableEmpty" style="display:none;">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+                  <path d="M3 3h18v18H3z"/><path d="M9 9h6m-6 3h6m-6 3h4"/>
+                </svg>
+                <p>분석 데이터가 없습니다</p>
+              </div>
+            </div>
+          </div>
+
         </div>
 
       </section>
 
     </div><!-- /sf-content -->
 
-    <!-- ▸ 하단 Page Tab Bar (Spotfire 스타일) -->
+    <!-- 하단 Page Tab Bar -->
     <nav class="sf-pagetab-bar" id="sfPageTabBar">
       <div class="sf-pagetab-list">
-        <a href="{% url 'spotfire_ai:index' %}" class="sf-pagetab sf-pagetab--active">
+        <a href="{% url 'spotfire_ai:index' %}" class="sf-pagetab">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Interlock
         </a>
-        <!-- 새 페이지 추가 시 여기에 <a> 태그 추가 -->
-        <a href="{% url 'stoploss_ai:index' %}" class="sf-pagetab">
+        <a href="{% url 'stoploss_ai:index' %}" class="sf-pagetab sf-pagetab--active">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
           Stoploss
         </a>
@@ -332,8 +427,8 @@
     <div class="sf-copilot__history" id="copilotHistory">
       <div class="sf-chat-msg sf-chat-msg--ai">
         <div class="sf-chat-msg__bubble">
-          안녕하세요! 설비 이상 현황에 대해 질문해 주세요.<br><br>
-          <span style="opacity:.7;">예) "상위 10개 설비는?" / "라인별 집계는?"</span>
+          안녕하세요! 설비 정지로스 현황에 대해 질문해 주세요.<br><br>
+          <span style="opacity:.7;">예) "정지로스가 가장 많은 설비는?" / "MCC 인터락 집계는?"</span>
         </div>
       </div>
     </div>
@@ -341,9 +436,9 @@
     <div class="sf-copilot__input-area">
       <div class="sf-copilot__context-hint" id="copilotContextHint" style="display:none;"></div>
       <div class="sf-quick-btns">
-        <button class="sf-quick-btn" data-q="발생 건수 상위 10개 설비는?">🏆 Top 설비</button>
-        <button class="sf-quick-btn" data-q="라인별 집계 결과를 보여줘">📊 라인별</button>
-        <button class="sf-quick-btn" data-q="파라미터명별 발생 건수를 알려줘">📈 파라미터</button>
+        <button class="sf-quick-btn" data-q="이번달 정지로스가 가장 많은 설비는?">🏆 Top 설비</button>
+        <button class="sf-quick-btn" data-q="MCC 인터락이 가장 많은 라인은?">⚡ MCC 라인</button>
+        <button class="sf-quick-btn" data-q="PM 로스율이 가장 높은 기종은?">📊 PM 기종</button>
       </div>
       <div class="sf-copilot__input-row">
         <textarea
@@ -366,6 +461,6 @@
 <div class="sf-toast" id="sfToast" role="alert" aria-live="assertive"></div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="{% static 'spotfire_ai/js/dashboard.js' %}"></script>
+<script src="{% static 'stoploss_ai/js/dashboard.js' %}"></script>
 </body>
 </html>
