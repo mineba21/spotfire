@@ -33,12 +33,12 @@
     </div>
   </div>
 
-  <!-- Line -->
+  <!-- Area (구 Line) -->
   <div class="sf-sidebar__section">
-    <label class="sf-sidebar__section-label" for="filterLine">Line</label>
-    <select id="filterLine" name="line" multiple class="sf-select">
+    <label class="sf-sidebar__section-label" for="filterArea">Area</label>
+    <select id="filterArea" name="area" multiple class="sf-select">
       <option value="ALL" selected>ALL</option>
-      {% for v in filter_options.lines %}
+      {% for v in filter_options.areas %}
         <option value="{{ v }}">{{ v }}</option>
       {% endfor %}
     </select>
@@ -77,12 +77,12 @@
     </select>
   </div>
 
-  <!-- Param Type -->
+  <!-- PRC Group -->
   <div class="sf-sidebar__section">
-    <label class="sf-sidebar__section-label" for="filterParamType">Param Type</label>
-    <select id="filterParamType" name="param_type" multiple class="sf-select">
+    <label class="sf-sidebar__section-label" for="filterPrcGroup">PRC Group</label>
+    <select id="filterPrcGroup" name="prc_group" multiple class="sf-select">
       <option value="ALL" selected>ALL</option>
-      {% for v in filter_options.param_types %}
+      {% for v in filter_options.prc_groups %}
         <option value="{{ v }}">{{ v }}</option>
       {% endfor %}
     </select>

@@ -38,21 +38,37 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+// Rawdata 테이블에서 숫자로 취급해 우측 정렬할 컬럼 목록
+const NUMERIC_COLS = new Set([
+  "stoploss", "pm", "qual", "bm", "eng", "etc", "stepchg", "std_time", "rd",
+  "plan_time", "rank", "cnt", "ratio", "loss_time_min",
+]);
+
+// 컬럼 키 → 표시 레이블 (없으면 키를 대문자로 그대로 사용)
+const COL_LABELS = {
+  eqp_id:       "EQP ID",
+  eqp_model:    "EQP Model",
+  sdwt_prod:    "SDWT Prod",
+  prc_group:    "PRC Group",
+  plan_time:    "Plan Time",
+  stoploss:     "Stoploss",
+  loss_time_min:"Loss (min)",
+  down_comment: "Comment",
+  start_time:   "Start",
+  end_time:     "End",
+  yyyymmdd:     "Date",
+};
+
 /**
  * Top Show 그룹화 기준 컬럼 목록
  * stoploss의 eqp_loss_tpm 테이블 컬럼 기준 (loss_time 집계 포함)
  */
 const TOP_GROUP_OPTIONS = [
-  { value: "line",                                          label: "Line"                                    },
-  { value: "line,eqp_id",                                   label: "Line + EQP ID"                           },
-  { value: "line,eqp_id,param_type",                        label: "Line + EQP ID + Param Type"              },
-  { value: "line,eqp_id,param_type,param_name",             label: "Line + EQP ID + Param Type + Param Name" },
-  { value: "eqp_id",                                        label: "EQP ID"                                  },
-  { value: "eqp_id,param_type",                             label: "EQP ID + Param Type"                     },
-  { value: "eqp_id,param_type,param_name",                  label: "EQP ID + Param Type + Param Name"        },
-  { value: "param_type",                                    label: "Param Type"                              },
-  { value: "param_type,param_name",                         label: "Param Type + Param Name"                 },
-  { value: "param_name",                                    label: "Param Name"                              },
+  { value: "area",               label: "Line"              },
+  { value: "area,sdwt_prod",     label: "Line + 분임조"      },
+  { value: "area,eqp_model",     label: "Line + EQP Model"  },
+  { value: "eqp_model",          label: "EQP Model"         },
+  { value: "sdwt_prod",          label: "분임조"             },
 ];
 
 const MSG = {
@@ -115,7 +131,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // 필터 select 변경 시 옵션 동적 갱신
-  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
+  ["filterArea", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterPrcGroup"]
     .forEach((id) => on(id, "change", refreshFilterOptions));
 
   document.querySelectorAll('input[name="detailMode"]').forEach((radio) => {
@@ -167,7 +183,7 @@ function _initTopGroupSelect() {
     select.appendChild(el);
   });
 
-  select.value = "line,eqp_id";
+  select.value = "area";
 
   select.addEventListener("change", renderDetailPanel);
   if (topNEl) topNEl.addEventListener("change", renderDetailPanel);
@@ -180,7 +196,7 @@ function _initTopGroupSelect() {
 
 function collectFilters() {
   const params = new URLSearchParams();
-
+ 
   function addMultiSelect(selectId, paramName) {
     const el = document.getElementById(selectId);
     if (!el) return;
@@ -188,25 +204,25 @@ function collectFilters() {
     if (!selected.length || selected.includes(ALL_VALUE)) return;
     selected.forEach((v) => params.append(paramName, v));
   }
-
-  addMultiSelect("filterLine",      "line");
-  addMultiSelect("filterSdwtProd",  "sdwt_prod");
-  addMultiSelect("filterEqpModel",  "eqp_model");
-  addMultiSelect("filterEqpId",     "eqp_id");
-  addMultiSelect("filterParamType", "param_type");
+ 
+  addMultiSelect("filterArea",     "area");
+  addMultiSelect("filterSdwtProd", "sdwt_prod");
+  addMultiSelect("filterEqpModel", "eqp_model");
+  addMultiSelect("filterEqpId",    "eqp_id");
+  addMultiSelect("filterPrcGroup", "prc_group");
 
   params.append("m_rank",  document.getElementById("rankM").value || 999);
   params.append("w_rank",  document.getElementById("rankW").value || 999);
   params.append("d_rank",  document.getElementById("rankD").value || 999);
   params.append("y_field", document.getElementById("yFieldSelect").value);
   params.append("y_mode",  state.yMode);
-
+ 
   return params;
 }
-
+ 
 function collectFiltersAsDict() {
   const result = {};
-
+ 
   function addMultiSelect(selectId, fieldName) {
     const el = document.getElementById(selectId);
     if (!el) return;
@@ -214,16 +230,15 @@ function collectFiltersAsDict() {
     if (!selected.length || selected.includes(ALL_VALUE)) return;
     result[fieldName] = selected;
   }
-
-  addMultiSelect("filterLine",      "line");
-  addMultiSelect("filterSdwtProd",  "sdwt_prod");
-  addMultiSelect("filterEqpModel",  "eqp_model");
-  addMultiSelect("filterEqpId",     "eqp_id");
-  addMultiSelect("filterParamType", "param_type");
+ 
+  addMultiSelect("filterArea",     "area");
+  addMultiSelect("filterSdwtProd", "sdwt_prod");
+  addMultiSelect("filterEqpModel", "eqp_model");
+  addMultiSelect("filterEqpId",    "eqp_id");
+  addMultiSelect("filterPrcGroup", "prc_group");
 
   return result;
 }
-
 /**
  * Y Mode (min / pct) 전환
  */
@@ -233,6 +248,8 @@ function setYMode(mode) {
     btn.classList.toggle("sf-ymode-btn--active", btn.dataset.mode === mode);
   });
   fetchReportData();
+  // Top Show 가 열려있으면 y_mode 변경 즉시 재집계
+  if (state.rawRows.length && state.detailMode === "top") renderTopPanel();
 }
 
 /**
@@ -259,11 +276,11 @@ async function refreshFilterOptions() {
     return;
   }
 
-  _rebuildSelect("filterLine",      data.lines,       "line");
-  _rebuildSelect("filterSdwtProd",  data.sdwt_prods,  "sdwt_prod");
-  _rebuildSelect("filterEqpModel",  data.eqp_models,  "eqp_model");
-  _rebuildSelect("filterEqpId",     data.eqp_ids,     "eqp_id");
-  _rebuildSelect("filterParamType", data.param_types, "param_type");
+  _rebuildSelect("filterArea",      data.areas,      "area");
+  _rebuildSelect("filterSdwtProd",  data.sdwt_prods, "sdwt_prod");
+  _rebuildSelect("filterEqpModel",  data.eqp_models, "eqp_model");
+  _rebuildSelect("filterEqpId",     data.eqp_ids,    "eqp_id");
+  _rebuildSelect("filterPrcGroup",  data.prc_groups, "prc_group");
 }
 
 function _rebuildSelect(selectId, newValues, fieldName) {
@@ -291,7 +308,7 @@ function _rebuildSelect(selectId, newValues, fieldName) {
 }
 
 function resetFilters() {
-  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
+  ["filterArea", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterPrcGroup"]
     .forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -531,9 +548,11 @@ function renderRawTable() {
 
   const headerRow = document.createElement("tr");
   state.rawColumns.forEach((col) => {
-    const th = document.createElement("th");
-    th.textContent = col;
-    th.title       = col;
+    const th    = document.createElement("th");
+    const label = COL_LABELS[col] || col;
+    th.textContent = label;
+    th.title       = label;
+    if (NUMERIC_COLS.has(col)) th.style.textAlign = "right";
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
@@ -546,8 +565,14 @@ function renderRawTable() {
     state.rawColumns.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-      td.textContent = (val != null) ? val : "";
-      if (typeof val === "number") td.style.textAlign = "right";
+      if (NUMERIC_COLS.has(col)) {
+        td.style.textAlign = "right";
+        td.textContent = (val != null)
+          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+          : "-";
+      } else {
+        td.textContent = (val != null && val !== "") ? val : "-";
+      }
       tr.appendChild(td);
     });
     fragment.appendChild(tr);
@@ -565,55 +590,60 @@ function renderRawTable() {
   }
 }
 
-// ── Top Show (loss_time 기반 그룹 집계) ──────────────────────
+// ── Top Show (report_stoploss 기반 그룹 집계) ────────────────
 
 /**
- * state.rawRows 를 JS 에서 직접 그룹별 loss_time 합산해 Top-N 차트 + 테이블을 렌더링한다.
+ * state.rawRows(report_stoploss) 를 그룹별로 집계해 Top-N 차트 + 테이블을 렌더링한다.
+ * - y_field : 현재 선택된 손실 컬럼 (stoploss/pm/qual/bm/eng/etc/stepchg/std_time/rd)
+ * - y_mode  : "min" → 절대값(분) / "pct" → plan_time 대비 %
  */
 function renderTopPanel() {
   if (!state.rawRows.length) return;
 
-  const groupColStr = document.getElementById("topGroupSelect").value || "line,eqp_id";
+  const groupColStr = document.getElementById("topGroupSelect").value || "area";
   const groupCols   = groupColStr.split(",").map((c) => c.trim()).filter(Boolean);
   const topN        = Math.max(1, parseInt(document.getElementById("topNInput").value, 10) || 10);
+  const yField      = document.getElementById("yFieldSelect")?.value || "stoploss";
+  const yMode       = state.yMode;
 
-  // ── 그룹별 loss_time 합산 ─────────────────────────────────
-  const aggMap = new Map(); // key → { cols 값들, loss_time_sum, cnt }
+  // ── 그룹별 집계 ───────────────────────────────────────────
+  const aggMap = new Map();
 
   state.rawRows.forEach((row) => {
     const keyParts = groupCols.map((col) => (row[col] != null ? String(row[col]) : ""));
     const key      = keyParts.join("|");
 
-    if (aggMap.has(key)) {
-      const entry = aggMap.get(key);
-      entry.loss_time_sum += (row.loss_time || 0);
-      entry.cnt += 1;
-    } else {
-      const entry = { loss_time_sum: (row.loss_time || 0), cnt: 1 };
+    if (!aggMap.has(key)) {
+      const entry = { y_sum: 0, plan_sum: 0, cnt: 0 };
       groupCols.forEach((col) => { entry[col] = row[col] != null ? String(row[col]) : ""; });
       aggMap.set(key, entry);
     }
+    const entry = aggMap.get(key);
+    entry.y_sum    += (row[yField] || 0);
+    entry.plan_sum += (row.plan_time || 0);
+    entry.cnt      += 1;
   });
 
-  // ── loss_time_sum 내림차순 정렬 → 상위 N 추출 ───────────
+  // ── 값 계산 → 정렬 → 상위 N ──────────────────────────────
   const sorted = Array.from(aggMap.values())
-    .sort((a, b) => b.loss_time_sum - a.loss_time_sum)
+    .map((entry) => ({
+      ...entry,
+      display_val: yMode === "pct" && entry.plan_sum > 0
+        ? Math.round(entry.y_sum / entry.plan_sum * 10000) / 100   // 소수점 2자리 %
+        : Math.round(entry.y_sum * 10) / 10,
+    }))
+    .sort((a, b) => b.display_val - a.display_val)
     .slice(0, topN);
 
-  if (!sorted.length) {
-    showToast("집계 결과가 없습니다.");
-    return;
-  }
+  if (!sorted.length) { showToast("집계 결과가 없습니다."); return; }
 
-  // ── y축 레이블 ─────────────────────────────────────────
-  const yLabels = sorted.map((row) =>
-    groupCols.map((col) => row[col] || "-").join(" / ")
-  );
-  const xValues = sorted.map((row) => Math.round(row.loss_time_sum * 10) / 10);
-
-  // ── Plotly 수평 bar ─────────────────────────────────────
   const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
   const fontColor = isDark ? "#94a3b8" : "#64748b";
+  const unit      = yMode === "pct" ? "%" : " min";
+  const xTitle    = yMode === "pct" ? `${yField.toUpperCase()} (%)` : `${yField.toUpperCase()} (min)`;
+
+  const yLabels = sorted.map((r) => groupCols.map((c) => r[c] || "-").join(" / "));
+  const xValues = sorted.map((r) => r.display_val);
 
   const traces = [{
     type:          "bar",
@@ -621,118 +651,102 @@ function renderTopPanel() {
     x:             xValues,
     y:             yLabels,
     marker:        { color: yLabels.map((_, i) => COLORS[i % COLORS.length]) },
-    text:          xValues.map((v) => v.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " min"),
+    text:          xValues.map((v) => v.toLocaleString(undefined, { maximumFractionDigits: 2 }) + unit),
     textposition:  "auto",
-    hovertemplate: "<b>%{y}</b><br>Loss: %{x:,.1f} min<extra></extra>",
+    hovertemplate: `<b>%{y}</b><br>${xTitle}: %{x:,.2f}${unit}<extra></extra>`,
   }];
 
   const layout = {
     margin:  { t: 8, b: 30, l: 160, r: 60 },
-    xaxis: {
-      title:      { text: "Loss Time (min)", font: { size: 11 } },
-      automargin: true,
-      fixedrange: true,
-    },
-    yaxis: {
-      automargin: true,
-      fixedrange: true,
-      autorange:  "reversed",
-    },
+    xaxis: { title: { text: xTitle, font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis: { automargin: true, fixedrange: true, autorange: "reversed" },
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
-    font:          { family: "Inter, sans-serif", size: 11, color: fontColor },
-    hoverlabel:    { bgcolor: "#0f172a", font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
+    font:      { family: "Inter, sans-serif", size: 11, color: fontColor },
+    hoverlabel: { bgcolor: "#0f172a", font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
   };
 
   Plotly.react("chartTop", traces, layout, { responsive: true, displayModeBar: false });
 
-  // chartTop bar 클릭 → 해당 그룹 Rawdata 표시
+  // rank bar 클릭 → tpm_eqp_loss 조회
   const topEl = document.getElementById("chartTop");
-  if (typeof topEl.removeAllListeners === "function") {
-    topEl.removeAllListeners("plotly_click");
-  }
+  if (typeof topEl.removeAllListeners === "function") topEl.removeAllListeners("plotly_click");
   topEl.on("plotly_click", (eventData) => {
     if (!eventData?.points?.length) return;
-    const pointIdx   = eventData.points[0].pointIndex;
-    const clickedRow = sorted[pointIdx];
+    const clickedRow = sorted[eventData.points[0].pointIndex];
     if (clickedRow) onTopBarClick(clickedRow, groupCols);
   });
 
-  // 순위 테이블
-  _renderTopTable(sorted, groupCols);
+  _renderTopTable();
 }
 
-function _renderTopTable(rows, groupCols) {
+function _renderTopTable() {
   const thead = document.getElementById("topTableHead");
   const tbody = document.getElementById("topTableBody");
   thead.innerHTML = "";
   tbody.innerHTML = "";
 
+  const rows = state.rawRows;
   if (!rows.length) return;
 
-  // 헤더: # + 그룹 컬럼들 + loss_time_sum + cnt
-  const displayCols = [...groupCols, "loss_time_sum", "cnt"];
-  const headerRow   = document.createElement("tr");
+  const cols = ["eqp_id", "stoploss", "plan_time"];
 
-  const thRank       = document.createElement("th");
-  thRank.textContent = "#";
-  headerRow.appendChild(thRank);
-
-  displayCols.forEach((col) => {
+  // 헤더
+  const headerRow = document.createElement("tr");
+  cols.forEach((col) => {
     const th = document.createElement("th");
-    if      (col === "loss_time_sum") th.textContent = "Loss (min)";
-    else if (col === "cnt")           th.textContent = "건수";
-    else                              th.textContent = col;
+    th.textContent = col.toUpperCase().replace("_", " ");
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
 
+  // 바디
   const fragment = document.createDocumentFragment();
-  rows.forEach((row, idx) => {
+  rows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
     const tr = document.createElement("tr");
-
-    const rankTd       = document.createElement("td");
-    rankTd.textContent = idx + 1;
-    rankTd.className   = "sf-rank-cell";
-    tr.appendChild(rankTd);
-
-    displayCols.forEach((col) => {
+    cols.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-
-      if (col === "loss_time_sum") {
-        td.textContent = val != null
-          ? val.toLocaleString(undefined, { maximumFractionDigits: 1 })
-          : "0";
-        td.style.textAlign = "right";
-        td.classList.add("sf-highlight-cell");
-      } else if (col === "cnt") {
-        td.textContent     = val != null ? val.toLocaleString() : "0";
-        td.style.textAlign = "right";
-      } else {
-        td.textContent = val != null ? val : "";
-      }
+      td.textContent = val != null ? val : "";
+      if (typeof val === "number") td.style.textAlign = "right";
       tr.appendChild(td);
     });
-
     fragment.appendChild(tr);
   });
   tbody.appendChild(fragment);
 }
 
-function onTopBarClick(clickedRow, groupCols) {
-  const filtered = state.rawRows.filter((row) =>
+async function onTopBarClick(clickedRow, groupCols) {
+  // 클릭된 그룹에 속하는 eqp_id 목록 수집
+  const matchedRows = state.rawRows.filter((row) =>
     groupCols.every((col) => String(row[col] ?? "") === String(clickedRow[col] ?? ""))
   );
+  const eqpIds = [...new Set(matchedRows.map((r) => r.eqp_id).filter(Boolean))];
 
   const badgeText = groupCols
     .map((col) => `${col}=${clickedRow[col] || "-"}`)
     .join(" / ");
 
-  _renderTopRaw(filtered, badgeText);
+  if (!state.selectedBar) {
+    showToast("먼저 메인 차트의 bar를 클릭하세요.");
+    return;
+  }
+
+  const { flag, yyyy, flagdate } = state.selectedBar;
+  const params = new URLSearchParams({ flag, yyyy, flagdate });
+  eqpIds.forEach((id) => params.append("eqp_id", id));
+
+  try {
+    const res  = await fetch(`${URLS.eqpLossDetail}?${params.toString()}`);
+    const json = await res.json();
+    if (!json.ok) { showToast(MSG.API_ERROR(json.error)); return; }
+    _renderTopRaw(json.data.rows, badgeText, json.data.columns);
+  } catch (err) {
+    showToast(MSG.NET_ERROR(err.message));
+  }
 }
 
-function _renderTopRaw(rows, badgeText) {
+function _renderTopRaw(rows, badgeText, columns) {
   const panel   = document.getElementById("topRawPanel");
   const badge   = document.getElementById("topRawBadge");
   const countEl = document.getElementById("topRawCount");
@@ -752,12 +766,14 @@ function _renderTopRaw(rows, badgeText) {
   panel.style.display = "block";
 
   thead.innerHTML = "";
-  const columns   = state.rawColumns.length ? state.rawColumns : Object.keys(rows[0]);
+  const cols      = columns || (rows.length ? Object.keys(rows[0]) : []);
   const headerRow = document.createElement("tr");
-  columns.forEach((col) => {
-    const th       = document.createElement("th");
-    th.textContent = col;
-    th.title       = col;
+  cols.forEach((col) => {
+    const th    = document.createElement("th");
+    const label = COL_LABELS[col] || col;
+    th.textContent = label;
+    th.title       = label;
+    if (NUMERIC_COLS.has(col)) th.style.textAlign = "right";
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
@@ -768,11 +784,17 @@ function _renderTopRaw(rows, badgeText) {
 
   visible.forEach((row) => {
     const tr = document.createElement("tr");
-    columns.forEach((col) => {
+    cols.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-      td.textContent = (val != null) ? val : "";
-      if (typeof val === "number") td.style.textAlign = "right";
+      if (NUMERIC_COLS.has(col)) {
+        td.style.textAlign = "right";
+        td.textContent = (val != null)
+          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+          : "-";
+      } else {
+        td.textContent = (val != null && val !== "") ? val : "-";
+      }
       tr.appendChild(td);
     });
     fragment.appendChild(tr);
@@ -784,6 +806,7 @@ function _renderTopRaw(rows, badgeText) {
     const td = document.createElement("td");
     td.colSpan     = columns.length;
     td.className   = "sf-table-truncate-msg";
+    td.colSpan     = cols.length;
     td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -800,8 +823,8 @@ function closeTopRaw() {
 /**
  * state.ratioRows 를 Ratio Analysis 테이블로 렌더링한다.
  *
- * 컬럼: param_type, param_name, loss_time_min,
- *        pct_vs_eqp, pct_vs_sdwt, pct_vs_model, pct_vs_line, pct_vs_total
+ * 컬럼: state, loss_time_min,
+ *        pct_vs_eqp, pct_vs_model, pct_vs_sdwt, pct_vs_area, pct_vs_total
  */
 function renderRatioPanel() {
   const thead   = document.getElementById("ratioTableHead");
@@ -819,13 +842,12 @@ function renderRatioPanel() {
   if (emptyEl) emptyEl.style.display = "none";
 
   const cols = [
-    { key: "param_type",    label: "Param Type"  },
-    { key: "param_name",    label: "Param Name"  },
+    { key: "state",         label: "State"       },
     { key: "loss_time_min", label: "Loss (min)"  },
     { key: "pct_vs_eqp",   label: "vs EQP %"    },
-    { key: "pct_vs_sdwt",  label: "vs SDWT %"   },
     { key: "pct_vs_model", label: "vs Model %"  },
-    { key: "pct_vs_line",  label: "vs Line %"   },
+    { key: "pct_vs_sdwt",  label: "vs SDWT %"   },
+    { key: "pct_vs_area",  label: "vs Area %"   },
     { key: "pct_vs_total", label: "vs Total %"  },
   ];
 

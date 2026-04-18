@@ -1,7 +1,7 @@
 """
 stoploss_ai/services/ai_service.py
 
-LLM 공유: spotfire_ai.services.llm_interface.get_llm_client() 재사용
+LLM 공유: interlock_ai.services.llm_interface.get_llm_client() 재사용
 테이블: eqp_loss_tpm (상세 loss 이벤트)
 """
 from stoploss_ai.models import TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT
@@ -19,7 +19,7 @@ def ask_ai(question: str, page_context: str, selected_bar, sidebar_filters: dict
 
     반환: {"ok": True, "data": {...}} 또는 {"ok": False, "error": "..."}
     """
-    from spotfire_ai.services.llm_interface import get_llm_client
+    from interlock_ai.services.llm_interface import get_llm_client
     from stoploss_ai.services.json_validator import validate_stoploss_query_json
     from stoploss_ai.services.query_builder import execute_stoploss_query
     import logging

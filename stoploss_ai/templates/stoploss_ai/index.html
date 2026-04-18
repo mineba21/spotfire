@@ -144,10 +144,11 @@
 
   <script>
     window.SF_URLS = {
-      reportData   : "{% url 'stoploss_ai:api_report_data' %}",
-      clickDetail  : "{% url 'stoploss_ai:api_click_detail' %}",
-      filterOptions: "{% url 'stoploss_ai:api_filter_options' %}",
-      askAi        : "{% url 'stoploss_ai:api_ask_ai' %}",
+      reportData    : "{% url 'stoploss_ai:api_report_data' %}",
+      clickDetail   : "{% url 'stoploss_ai:api_click_detail' %}",
+      eqpLossDetail : "{% url 'stoploss_ai:api_eqp_loss_detail' %}",
+      filterOptions : "{% url 'stoploss_ai:api_filter_options' %}",
+      askAi         : "{% url 'stoploss_ai:api_ask_ai' %}",
     };
   </script>
 </head>
@@ -396,7 +397,7 @@
     <!-- 하단 Page Tab Bar -->
     <nav class="sf-pagetab-bar" id="sfPageTabBar">
       <div class="sf-pagetab-list">
-        <a href="{% url 'spotfire_ai:index' %}" class="sf-pagetab">
+        <a href="{% url 'interlock_ai:index' %}" class="sf-pagetab">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Interlock
         </a>

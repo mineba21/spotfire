@@ -16,7 +16,7 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
-  <link rel="stylesheet" href="{% static 'spotfire_ai/css/dashboard.css' %}">
+  <link rel="stylesheet" href="{% static 'interlock_ai/css/dashboard.css' %}">
   <style>
     /* sf-detail 이 콘텐츠 크기만큼 늘어나고 sf-content 가 전체 스크롤을 담당 */
     .sf-content       { overflow-y: auto !important; }
@@ -87,10 +87,10 @@
 
   <script>
     window.SF_URLS = {
-      reportData   : "{% url 'spotfire_ai:api_report_data' %}",
-      clickDetail  : "{% url 'spotfire_ai:api_click_detail' %}",
-      filterOptions: "{% url 'spotfire_ai:api_filter_options' %}",
-      askAi        : "{% url 'spotfire_ai:api_ask_ai' %}",
+      reportData   : "{% url 'interlock_ai:api_report_data' %}",
+      clickDetail  : "{% url 'interlock_ai:api_click_detail' %}",
+      filterOptions: "{% url 'interlock_ai:api_filter_options' %}",
+      askAi        : "{% url 'interlock_ai:api_ask_ai' %}",
     };
   </script>
 </head>
@@ -98,7 +98,7 @@
 <body class="sf-body">
 <div class="sf-layout" id="sfLayout">
 
-  {% include "spotfire_ai/partials/sidebar.html" %}
+  {% include "interlock_ai/partials/sidebar.html" %}
 
   <main class="sf-main" id="sfMain">
 
@@ -115,14 +115,6 @@
         </div>
       </div>
       <div class="sf-topbar__right">
-        <div class="sf-topbar__control">
-          <span class="sf-topbar__label">Y축</span>
-          <select id="yFieldSelect" class="sf-select-sm">
-            <option value="cnt" selected>Count</option>
-            <option value="ratio">Ratio (%)</option>
-          </select>
-        </div>
-
         <button class="sf-theme-btn" id="themeToggleBtn" title="테마 전환">
           <svg class="sf-theme-btn__icon sf-theme-btn__icon--moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
@@ -300,7 +292,7 @@
     <!-- ▸ 하단 Page Tab Bar (Spotfire 스타일) -->
     <nav class="sf-pagetab-bar" id="sfPageTabBar">
       <div class="sf-pagetab-list">
-        <a href="{% url 'spotfire_ai:index' %}" class="sf-pagetab sf-pagetab--active">
+        <a href="{% url 'interlock_ai:index' %}" class="sf-pagetab sf-pagetab--active">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Interlock
         </a>
@@ -366,6 +358,6 @@
 <div class="sf-toast" id="sfToast" role="alert" aria-live="assertive"></div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="{% static 'spotfire_ai/js/dashboard.js' %}"></script>
+<script src="{% static 'interlock_ai/js/dashboard.js' %}"></script>
 </body>
 </html>

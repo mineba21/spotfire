@@ -123,7 +123,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   on("applyFilterBtn",    "click",  fetchReportData);
   on("resetFilterBtn",    "click",  resetFilters);
-  on("yFieldSelect",      "change", fetchReportData);
+  // y_field 는 cnt 고정 (인터락 페이지는 count 만 사용)
 
   // 필터 select 변경 시 옵션 동적 갱신 (차트 자동 새로고침 없음)
   ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
@@ -215,7 +215,7 @@ function collectFilters() {
   params.append("m_rank", document.getElementById("rankM").value || 999);
   params.append("w_rank", document.getElementById("rankW").value || 999);
   params.append("d_rank", document.getElementById("rankD").value || 999);
-  params.append("y_field", document.getElementById("yFieldSelect").value);
+  params.append("y_field", "cnt");  // 인터락 페이지는 count 고정
 
   return params;
 }
@@ -336,7 +336,7 @@ function resetFilters() {
   document.getElementById("rankM").value        = 3;
   document.getElementById("rankW").value        = 3;
   document.getElementById("rankD").value        = 7;
-  document.getElementById("yFieldSelect").value = "cnt";
+  // y_field 고정값 사용 — select 없음
 
   fetchReportData();
 }
@@ -401,7 +401,7 @@ function renderBarChart(flag, data) {
     hovertemplate: "<b>%{x}</b><br>%{y:,.0f}<extra>%{fullData.name}</extra>",
   }));
 
-  const yLabel    = document.getElementById("yFieldSelect").value;
+  const yLabel    = "cnt";
   const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
   const fontColor = isDark ? "#94a3b8" : "#64748b";
   const hoverBg   = isDark ? "#1e293b" : "#0f172a";

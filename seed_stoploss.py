@@ -1,119 +1,219 @@
 """
 seed_stoploss.py
-테이블: report_stoploss, eqp_loss_tpm
-실행: python seed_stoploss.py
+
+테이블:
+  report_stoploss  → StoplossReport 모델
+  tpm_eqp_loss     → TpmEqpLoss 모델
+
+컬럼 매핑 (모델 ↔ DB):
+  StoplossReport.eqp_id    ← DB: station
+  StoplossReport.eqp_model ← DB: machine_id
+  TpmEqpLoss.eqp_id        ← DB: station
+
+실행:
+  python seed_stoploss.py
 """
-import os, random, datetime
+
+import os
+import random
+import datetime
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 import django
 django.setup()
 
-from django.db import connection
+from django.db import connections, connection as default_conn
 
 random.seed(99)
 
-DDL_REPORT = """
-CREATE TABLE IF NOT EXISTS report_stoploss (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    yyyy       TEXT NOT NULL,
-    flag       TEXT NOT NULL,
-    flagdate   TEXT NOT NULL,
-    line       TEXT NOT NULL DEFAULT '',
-    sdwt_prod  TEXT NOT NULL DEFAULT '',
-    eqp_id     TEXT NOT NULL DEFAULT '',
-    eqp_model  TEXT NOT NULL DEFAULT '',
-    plan_time  REAL NOT NULL DEFAULT 0.0,
-    stoploss   REAL NOT NULL DEFAULT 0.0,
-    pm         REAL NOT NULL DEFAULT 0.0,
-    qual       REAL NOT NULL DEFAULT 0.0,
-    bm         REAL NOT NULL DEFAULT 0.0,
-    rank       INTEGER NOT NULL DEFAULT 0
-);
-"""
+# ─── DB 연결 판별 ─────────────────────────────────────────────────
+# "tpm" DB(MySQL)에 연결 가능하면 그쪽을 사용, 아니면 기본(SQLite) 사용
+def _get_conn():
+    try:
+        c = connections["tpm"]
+        c.ensure_connection()
+        engine = c.settings_dict["ENGINE"]
+        is_mysql = "mysql" in engine
+        label = "tpm(MySQL)" if is_mysql else "tpm(SQLite)"
+        print(f"[seed] {label} DB 사용")
+        return c, is_mysql
+    except Exception as e:
+        print(f"[seed] tpm DB 연결 실패({e}), default(SQLite) 사용")
+        return default_conn, False
 
-DDL_EQP_LOSS = """
-CREATE TABLE IF NOT EXISTS eqp_loss_tpm (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    yyyymmdd   TEXT NOT NULL DEFAULT '',
-    act_time   TEXT NOT NULL DEFAULT '',
-    line       TEXT NOT NULL DEFAULT '',
-    sdwt_prod  TEXT NOT NULL DEFAULT '',
-    eqp_id     TEXT NOT NULL DEFAULT '',
-    unit_id    TEXT NOT NULL DEFAULT '',
-    eqp_model  TEXT NOT NULL DEFAULT '',
-    param_type TEXT NOT NULL DEFAULT '',
-    param_name TEXT NOT NULL DEFAULT '',
-    loss_time  REAL NOT NULL DEFAULT 0.0,
-    lot_id     TEXT NOT NULL DEFAULT ''
-);
-"""
+conn, IS_MYSQL = _get_conn()
 
-EQP_MAP = {
-    "L1": [("EQP-101","MODEL-X","EQP-101-U1"),("EQP-102","MODEL-X","EQP-102-U1"),("EQP-103","MODEL-Y","EQP-103-U1"),("EQP-104","MODEL-Y","EQP-104-U1")],
-    "L2": [("EQP-201","MODEL-Y","EQP-201-U1"),("EQP-202","MODEL-Y","EQP-202-U1"),("EQP-203","MODEL-Z","EQP-203-U1"),("EQP-204","MODEL-Z","EQP-204-U1")],
-    "L3": [("EQP-301","MODEL-Z","EQP-301-U1"),("EQP-302","MODEL-W","EQP-302-U1"),("EQP-303","MODEL-W","EQP-303-U1")],
-}
-SDWT_MAP = {"L1": "PROD-ALPHA", "L2": "PROD-BETA", "L3": "PROD-GAMMA"}
+# ─── DDL ─────────────────────────────────────────────────────────
+
+def _ddl_report():
+    if IS_MYSQL:
+        return """
+        CREATE TABLE IF NOT EXISTS report_stoploss (
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            yyyy       VARCHAR(4)   NOT NULL,
+            flag       VARCHAR(1)   NOT NULL,
+            flagdate   VARCHAR(10)  NOT NULL,
+            area       VARCHAR(50)  NOT NULL DEFAULT '',
+            sdwt_prod  VARCHAR(100) NOT NULL DEFAULT '',
+            station    VARCHAR(100) NOT NULL DEFAULT '',
+            machine_id VARCHAR(100) NOT NULL DEFAULT '',
+            prc_group  VARCHAR(100) NOT NULL DEFAULT '',
+            plan_time  DOUBLE       NOT NULL DEFAULT 0.0,
+            stoploss   DOUBLE       NOT NULL DEFAULT 0.0,
+            pm         DOUBLE       NOT NULL DEFAULT 0.0,
+            qual       DOUBLE       NOT NULL DEFAULT 0.0,
+            bm         DOUBLE       NOT NULL DEFAULT 0.0,
+            eng        DOUBLE       NOT NULL DEFAULT 0.0,
+            etc        DOUBLE       NOT NULL DEFAULT 0.0,
+            stepchg    DOUBLE       NOT NULL DEFAULT 0.0,
+            std_time   DOUBLE       NOT NULL DEFAULT 0.0,
+            rd         DOUBLE       NOT NULL DEFAULT 0.0,
+            `rank`     INT          NOT NULL DEFAULT 0
+        ) CHARACTER SET utf8mb4
+        """
+    else:
+        return """
+        CREATE TABLE IF NOT EXISTS report_stoploss (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            yyyy       TEXT NOT NULL,
+            flag       TEXT NOT NULL,
+            flagdate   TEXT NOT NULL,
+            area       TEXT NOT NULL DEFAULT '',
+            sdwt_prod  TEXT NOT NULL DEFAULT '',
+            station    TEXT NOT NULL DEFAULT '',
+            machine_id TEXT NOT NULL DEFAULT '',
+            prc_group  TEXT NOT NULL DEFAULT '',
+            plan_time  REAL NOT NULL DEFAULT 0.0,
+            stoploss   REAL NOT NULL DEFAULT 0.0,
+            pm         REAL NOT NULL DEFAULT 0.0,
+            qual       REAL NOT NULL DEFAULT 0.0,
+            bm         REAL NOT NULL DEFAULT 0.0,
+            eng        REAL NOT NULL DEFAULT 0.0,
+            etc        REAL NOT NULL DEFAULT 0.0,
+            stepchg    REAL NOT NULL DEFAULT 0.0,
+            std_time   REAL NOT NULL DEFAULT 0.0,
+            rd         REAL NOT NULL DEFAULT 0.0,
+            rank       INTEGER NOT NULL DEFAULT 0
+        )
+        """
+
+
+def _ddl_eqp_loss():
+    if IS_MYSQL:
+        return """
+        CREATE TABLE IF NOT EXISTS tpm_eqp_loss (
+            id           INT AUTO_INCREMENT PRIMARY KEY,
+            yyyymmdd     VARCHAR(10)  NOT NULL DEFAULT '',
+            station      VARCHAR(100) NOT NULL DEFAULT '',
+            start_time   VARCHAR(30)  NOT NULL DEFAULT '',
+            end_time     VARCHAR(30)  NOT NULL DEFAULT '',
+            state        VARCHAR(100) NOT NULL DEFAULT '',
+            down_comment VARCHAR(255) NOT NULL DEFAULT ''
+        ) CHARACTER SET utf8mb4
+        """
+    else:
+        return """
+        CREATE TABLE IF NOT EXISTS tpm_eqp_loss (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            yyyymmdd     TEXT NOT NULL DEFAULT '',
+            station      TEXT NOT NULL DEFAULT '',
+            start_time   TEXT NOT NULL DEFAULT '',
+            end_time     TEXT NOT NULL DEFAULT '',
+            state        TEXT NOT NULL DEFAULT '',
+            down_comment TEXT NOT NULL DEFAULT ''
+        )
+        """
+
+
+# ─── 마스터 데이터 ────────────────────────────────────────────────
+
 YYYY = "2026"
 
-# eqp_loss_tpm 전용 param
-PARAM_NAMES_MAP = {
-    "MCC": ["MOTOR_TRIP", "OVERLOAD", "PHASE_FAIL"],
-    "ERD": ["EMG_STOP", "DOOR_OPEN", "SAFETY_FENCE"],
-    "SPC": ["TEMP_OOC", "PRESSURE_OOC", "FLOW_OOC"],
-    "ENG": ["PM_SCHEDULED", "UNSCHEDULED_MAINT"],
-    "OPR": ["RECIPE_ERROR", "MATERIAL_WAIT", "OPERATOR_STOP"],
+# area → [(station, machine_id), ...]
+EQP_MAP = {
+    "A1": [
+        ("EQP-101", "MODEL-X"), ("EQP-102", "MODEL-X"),
+        ("EQP-103", "MODEL-Y"), ("EQP-104", "MODEL-Y"),
+    ],
+    "A2": [
+        ("EQP-201", "MODEL-Y"), ("EQP-202", "MODEL-Y"),
+        ("EQP-203", "MODEL-Z"), ("EQP-204", "MODEL-Z"),
+    ],
+    "A3": [
+        ("EQP-301", "MODEL-Z"), ("EQP-302", "MODEL-W"),
+        ("EQP-303", "MODEL-W"),
+    ],
+}
+SDWT_MAP    = {"A1": "PROD-ALPHA", "A2": "PROD-BETA",  "A3": "PROD-GAMMA"}
+PRC_GRP_MAP = {"A1": "DEPO",       "A2": "ETCH",        "A3": "CVD"}
+
+# tpm_eqp_loss state 값 → 한국어 down_comment
+STATE_COMMENT = {
+    "MCC_TRIP":          "MCC 트립 발생으로 설비 정지",
+    "OVERLOAD":          "모터 과부하 감지",
+    "EMG_STOP":          "비상정지 버튼 발동",
+    "DOOR_OPEN":         "안전 도어 오픈 감지",
+    "TEMP_OOC":          "온도 파라미터 OOC 발생",
+    "PRESSURE_OOC":      "압력 파라미터 OOC 발생",
+    "PM_SCHEDULED":      "계획 예방보전 작업",
+    "UNSCHEDULED_MAINT": "비계획 보전 작업 발생",
+    "RECIPE_ERROR":      "레시피 실행 오류",
+    "MATERIAL_WAIT":     "자재 공급 대기",
+    "OPERATOR_STOP":     "작업자 임의 정지",
 }
 
-# 라인별 param_type 분포 가중치 (라인마다 주로 발생하는 인터락이 다름)
-# → ratio 분석에서 레벨별 % 가 달라지도록 의도적으로 편향시킴
-LINE_PARAM_WEIGHTS = {
-    "L1": {"MCC": 50, "ERD": 20, "SPC": 15, "ENG": 10, "OPR":  5},  # L1: 주로 MCC
-    "L2": {"MCC": 10, "ERD": 15, "SPC": 50, "ENG": 15, "OPR": 10},  # L2: 주로 SPC
-    "L3": {"MCC":  5, "ERD": 20, "SPC": 10, "ENG": 25, "OPR": 40},  # L3: 주로 OPR·ENG
+# area별 state 분포 가중치 (area마다 주로 발생하는 정지 유형이 다름)
+AREA_STATE_WEIGHTS = {
+    "A1": {"MCC_TRIP": 40, "OVERLOAD": 20, "EMG_STOP": 15,
+           "PM_SCHEDULED": 15, "OPERATOR_STOP": 10},
+    "A2": {"TEMP_OOC": 40, "PRESSURE_OOC": 25, "DOOR_OPEN": 15,
+           "RECIPE_ERROR": 10, "MATERIAL_WAIT": 10},
+    "A3": {"PM_SCHEDULED": 25, "UNSCHEDULED_MAINT": 25, "OPERATOR_STOP": 25,
+           "RECIPE_ERROR": 15, "DOOR_OPEN": 10},
 }
 
-def _weighted_param_type(line: str) -> str:
-    """라인별 가중치에 따라 param_type 을 선택한다."""
-    weights = LINE_PARAM_WEIGHTS.get(line, {k: 20 for k in PARAM_NAMES_MAP})
-    population = []
-    for pt, w in weights.items():
-        population.extend([pt] * w)
+def _weighted_state(area: str) -> str:
+    weights = AREA_STATE_WEIGHTS.get(area, {s: 10 for s in STATE_COMMENT})
+    population = [s for s, w in weights.items() for _ in range(w)]
     return random.choice(population)
 
+
+# ─── report_stoploss 행 생성 ──────────────────────────────────────
 
 def _make_report_rows():
     rows = []
 
     def _append(flag, flagdate, max_combos=5):
         combos = []
-        for line, equips in EQP_MAP.items():
-            for eqp_id, eqp_model, _ in equips[:2]:
-                combos.append((line, eqp_id, eqp_model))
+        for area, equips in EQP_MAP.items():
+            for station, machine_id in equips[:2]:
+                combos.append((area, station, machine_id))
         random.shuffle(combos)
         combos = combos[:max_combos]
 
-        rank = 1
-        for line, eqp_id, eqp_model in combos:
-            plan_time = random.uniform(600, 1440)   # 10h~24h in min
+        for rank, (area, station, machine_id) in enumerate(combos, start=1):
+            plan_time = random.uniform(600, 1440)
             stoploss  = random.uniform(10, plan_time * 0.3)
-            pm   = stoploss * random.uniform(0.2, 0.4)
-            qual = stoploss * random.uniform(0.1, 0.3)
-            bm   = stoploss - pm - qual
-            if bm < 0: bm = 0
-            rows.append({
-                "yyyy": YYYY, "flag": flag, "flagdate": flagdate,
-                "line": line, "sdwt_prod": SDWT_MAP[line],
-                "eqp_id": eqp_id, "eqp_model": eqp_model,
-                "plan_time": round(plan_time, 2),
-                "stoploss": round(stoploss, 2),
-                "pm": round(pm, 2),
-                "qual": round(qual, 2),
-                "bm": round(bm, 2),
-                "rank": rank,
-            })
-            rank += 1
+
+            # 손실 시간을 9개 컬럼에 랜덤 분배
+            fracs = [random.random() for _ in range(9)]
+            total = sum(fracs)
+            pm, qual, bm, eng, etc, stepchg, std_time, rd, _ = [
+                round(stoploss * f / total, 2) for f in fracs
+            ]
+
+            rows.append((
+                YYYY, flag, flagdate,
+                area,
+                SDWT_MAP[area],
+                station,
+                machine_id,
+                PRC_GRP_MAP[area],
+                round(plan_time, 2),
+                round(stoploss, 2),
+                pm, qual, bm, eng, etc, stepchg, std_time, rd,
+                rank,
+            ))
 
     for m in range(1, 5):
         _append("M", f"M{m:02d}")
@@ -127,68 +227,88 @@ def _make_report_rows():
     return rows
 
 
+# ─── tpm_eqp_loss 행 생성 ────────────────────────────────────────
+
 def _make_eqp_loss_rows():
     rows = []
-    start = datetime.date(2026, 3, 1)
-    end   = datetime.date(2026, 4, 14)
-    lot_counter = 5000
+    start_date = datetime.date(2026, 1, 1)   # report_stoploss M01(1월)부터 커버
+    end_date   = datetime.date(2026, 4, 14)
 
-    for d in range((end - start).days + 1):
-        day      = start + datetime.timedelta(days=d)
+    for d in range((end_date - start_date).days + 1):
+        day      = start_date + datetime.timedelta(days=d)
         yyyymmdd = day.strftime("%Y%m%d")
 
-        for line, equips in EQP_MAP.items():
-            sdwt = SDWT_MAP[line]
+        for area, equips in EQP_MAP.items():
             active = random.sample(equips, k=random.randint(1, len(equips)))
 
-            for eqp_id, eqp_model, unit_id in active:
+            for station, _ in active:
                 n = random.randint(1, 5)
                 for _ in range(n):
-                    h, m, s = random.randint(6,22), random.randint(0,59), random.randint(0,59)
-                    act_time   = f"{day} {h:02d}:{m:02d}:{s:02d}"
-                    param_type = _weighted_param_type(line)   # 라인별 가중치 적용
-                    param_name = random.choice(PARAM_NAMES_MAP[param_type])
-                    loss_time  = round(random.uniform(5, 120), 2)
-                    lot_id     = f"LOT-{lot_counter:04d}"
-                    lot_counter += 1
+                    # 정지 시작시각 (06:00 ~ 22:00 사이)
+                    h   = random.randint(6, 21)
+                    m   = random.randint(0, 59)
+                    s   = random.randint(0, 59)
+                    dt_start = datetime.datetime(day.year, day.month, day.day, h, m, s)
+
+                    # 정지 지속시간: 5 ~ 120분
+                    duration_min = random.uniform(5, 120)
+                    dt_end = dt_start + datetime.timedelta(minutes=duration_min)
+
+                    state        = _weighted_state(area)
+                    down_comment = STATE_COMMENT[state]
 
                     rows.append((
-                        yyyymmdd, act_time, line, sdwt,
-                        eqp_id, unit_id, eqp_model,
-                        param_type, param_name,
-                        loss_time, lot_id,
+                        yyyymmdd,
+                        station,
+                        dt_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        dt_end.strftime("%Y-%m-%d %H:%M:%S"),
+                        state,
+                        down_comment,
                     ))
+
     return rows
 
+
+# ─── 실행 ─────────────────────────────────────────────────────────
 
 def run():
     report_rows   = _make_report_rows()
     eqp_loss_rows = _make_eqp_loss_rows()
 
-    with connection.cursor() as cur:
-        cur.execute(DDL_REPORT)
-        cur.execute(DDL_EQP_LOSS)
-        cur.execute("DELETE FROM report_stoploss")
-        cur.execute("DELETE FROM eqp_loss_tpm")
+    ph = "%s" if IS_MYSQL else "?"   # placeholder
 
-        cur.executemany(
-            """INSERT INTO report_stoploss
-               (yyyy,flag,flagdate,line,sdwt_prod,eqp_id,eqp_model,plan_time,stoploss,pm,qual,bm,rank)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            [(r["yyyy"],r["flag"],r["flagdate"],r["line"],r["sdwt_prod"],
-              r["eqp_id"],r["eqp_model"],r["plan_time"],r["stoploss"],
-              r["pm"],r["qual"],r["bm"],r["rank"]) for r in report_rows],
+    with conn.cursor() as cur:
+        # 구 테이블 정리 (스키마 변경된 경우를 대비)
+        cur.execute("DROP TABLE IF EXISTS tpm_eqp_loss")
+        cur.execute("DROP TABLE IF EXISTS report_stoploss")
+
+        cur.execute(_ddl_report())
+        cur.execute(_ddl_eqp_loss())
+
+        # report_stoploss INSERT
+        # 컬럼 수: yyyy flag flagdate area sdwt_prod station machine_id prc_group
+        #           plan_time stoploss pm qual bm eng etc stepchg std_time rd rank = 19
+        sql_report = (
+            f"INSERT INTO report_stoploss"
+            f" (yyyy, flag, flagdate,"
+            f"  area, sdwt_prod, station, machine_id, prc_group,"
+            f"  plan_time,"
+            f"  stoploss, pm, qual, bm, eng, etc, stepchg, std_time, rd,"
+            f"  {'`rank`' if IS_MYSQL else 'rank'})"
+            f" VALUES ({','.join([ph]*19)})"
         )
+        cur.executemany(sql_report, report_rows)
 
+        # tpm_eqp_loss INSERT
         cur.executemany(
-            """INSERT INTO eqp_loss_tpm
-               (yyyymmdd,act_time,line,sdwt_prod,eqp_id,unit_id,eqp_model,param_type,param_name,loss_time,lot_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            f"""INSERT INTO tpm_eqp_loss
+                (yyyymmdd, station, start_time, end_time, state, down_comment)
+               VALUES ({",".join([ph]*6)})""",
             eqp_loss_rows,
         )
 
-    print(f"report_stoploss  : {len(report_rows):,}행")
-    print(f"eqp_loss_tpm     : {len(eqp_loss_rows):,}행")
+    print(f"report_stoploss : {len(report_rows):,}행")
+    print(f"tpm_eqp_loss    : {len(eqp_loss_rows):,}행")
     print("샘플 데이터 삽입 완료!")
 
 

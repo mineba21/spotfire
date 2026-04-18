@@ -1,37 +1,40 @@
 """
 stoploss_ai/services/json_validator.py
 
-LLM 이 생성한 query JSON 의 유효성을 검증한다.
-spotfire_ai json_validator.py 와 동일한 구조로 stoploss 테이블용 allowlist 사용.
+[변경 이력]
+  - line → area 반영
+  - ALLOWED_REPORT_FIELDS 에 eng, etc, stepchg, std_time, rd 추가
 """
-from stoploss_ai.models import TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT
+from stoploss_ai.models import TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT, LOSS_COLUMNS
 
 ALLOWED_TABLES = frozenset({TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT})
 
 ALLOWED_EQP_LOSS_FIELDS = frozenset({
-    "yyyymmdd", "act_time", "line", "sdwt_prod", "eqp_id", "unit_id",
-    "eqp_model", "param_type", "param_name", "loss_time", "lot_id", "pk",
-    "yyyy_filter", "yyyymmdd_range",
+    # TpmEqpLoss 실제 컬럼 (tpm_eqp_loss 테이블 기준)
+    "yyyymmdd", "eqp_id",
+    "start_time", "end_time",
+    "state", "down_comment",
+    "pk",
+    "yyyymmdd_range",
 })
 
 ALLOWED_REPORT_FIELDS = frozenset({
-    "yyyy", "flag", "flagdate", "line", "sdwt_prod", "eqp_id", "eqp_model",
-    "plan_time", "stoploss", "pm", "qual", "bm", "rank", "pk",
+    "yyyy", "flag", "flagdate",
+    "area", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
+    "plan_time",
+    "stoploss", "pm", "qual", "bm",
+    "eng", "etc", "stepchg", "std_time", "rd",
+    "rank", "pk",
 })
 
-ALLOWED_AGG_FUNCS  = frozenset({"count", "avg", "sum", "max", "min"})
-ALLOWED_ORDER_DIRS = frozenset({"asc", "desc"})
-MAX_LIMIT          = 10000
+ALLOWED_AGG_FUNCS   = frozenset({"count", "avg", "sum", "max", "min"})
+ALLOWED_ORDER_DIRS  = frozenset({"asc", "desc"})
+MAX_LIMIT           = 10000
 ACT_TIME_RANGE_KEYS = frozenset({"flag", "yyyy", "flagdate"})
-ALLOWED_FLAGS      = frozenset({"M", "W", "D"})
+ALLOWED_FLAGS       = frozenset({"M", "W", "D"})
 
 
 def validate_stoploss_query_json(qj: dict) -> tuple:
-    """
-    LLM 이 생성한 query JSON 을 검증한다.
-
-    반환: (is_valid: bool, error_msg: str | None)
-    """
     if not isinstance(qj, dict):
         return False, "dict 여야 합니다"
 
@@ -50,7 +53,7 @@ def validate_stoploss_query_json(qj: dict) -> tuple:
 
     for field, value in filters.items():
         if field in ("act_time_range", "yyyy_filter", "yyyymmdd_range"):
-            continue  # 특수 필터는 별도 검증 생략
+            continue
         if field not in allowed_fields:
             return False, f"허용되지 않은 filter: '{field}'"
         if not isinstance(value, (list, str)):

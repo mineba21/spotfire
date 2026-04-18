@@ -1,5 +1,5 @@
 """
-spotfire_ai/views.py
+interlock_ai/views.py
 
 역할: request 파싱 + service 호출 + JSON/HTML response 반환
 규칙:
@@ -16,11 +16,11 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from spotfire_ai.models import SpotfireReport
-from spotfire_ai.services.filter_service import parse_sidebar_filters, build_filter_q
-from spotfire_ai.services.chart_service  import get_chart_data, parse_rank_limits
-from spotfire_ai.services.detail_service import get_raw_detail
-from spotfire_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
+from interlock_ai.models import SpotfireReport
+from interlock_ai.services.filter_service import parse_sidebar_filters, build_filter_q
+from interlock_ai.services.chart_service  import get_chart_data, parse_rank_limits
+from interlock_ai.services.detail_service import get_raw_detail
+from interlock_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def index(request):
     context = {
         "filter_options": filter_options,
     }
-    return render(request, "spotfire_ai/index.html", context)
+    return render(request, "interlock_ai/index.html", context)
 
 
 def _get_distinct(field: str) -> list:
@@ -110,7 +110,7 @@ def api_click_detail(request):
 @require_GET
 def api_filter_options(request):
     """
-    GET /spotfire-ai/api/filter-options/
+    GET /interlock-ai/api/filter-options/
 
     사이드바 선택값을 GET 파라미터로 받아
     해당 조건으로 필터링된 distinct 목록을 반환한다.
@@ -152,7 +152,7 @@ def api_filter_options(request):
 @require_POST
 def api_ask_ai(request):
     """
-    POST /spotfire-ai/api/ask-ai/
+    POST /interlock-ai/api/ask-ai/
 
     디버깅 팁:
       - Django 로그(DEBUG 레벨)에서 "[AI] query_json" 을 검색하면

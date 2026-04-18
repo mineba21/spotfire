@@ -13,7 +13,7 @@ services/json_validator.py
 """
 
 from __future__ import annotations
-from spotfire_ai.models import TABLE_RAW, TABLE_REPORT
+from interlock_ai.models import TABLE_RAW, TABLE_REPORT
 
 # ─────────────────────────────────────────────────────────────────
 # Allowlist 상수

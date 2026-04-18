@@ -1,17 +1,17 @@
 """
-spotfire_ai/urls.py  (앱 URL 설정)
+interlock_ai/urls.py  (앱 URL 설정)
 
 엔드포인트 목록:
-  GET  /spotfire-ai/                   → 메인 대시보드 페이지
-  GET  /spotfire-ai/api/report-data/   → M/W/D chart 데이터 (JSON)
-  GET  /spotfire-ai/api/click-detail/  → bar 클릭 후 raw detail (JSON)
-  GET  /spotfire-ai/api/filter-options/→ sidebar 드롭다운 선택지 (JSON)
-  POST /spotfire-ai/api/ask-ai/        → AI Copilot 질문 응답 (JSON)
+  GET  /interlock-ai/                   → 메인 대시보드 페이지
+  GET  /interlock-ai/api/report-data/   → M/W/D chart 데이터 (JSON)
+  GET  /interlock-ai/api/click-detail/  → bar 클릭 후 raw detail (JSON)
+  GET  /interlock-ai/api/filter-options/→ sidebar 드롭다운 선택지 (JSON)
+  POST /interlock-ai/api/ask-ai/        → AI Copilot 질문 응답 (JSON)
 """
 from django.urls import path
 from . import views
 
-app_name = "spotfire_ai"
+app_name = "interlock_ai"
 
 urlpatterns = [
     # ── 페이지 ──────────────────────────────────────────────────

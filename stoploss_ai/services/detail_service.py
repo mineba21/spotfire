@@ -2,68 +2,132 @@
 stoploss_ai/services/detail_service.py
 
 역할:
-- bar 클릭 시 전달되는 (flag, yyyy, flagdate) 로 날짜 범위를 계산한다
-- EqpLossTpm 테이블에서 해당 기간의 raw data 를 조회한다
-
-get_date_range() 는 spotfire_ai 에서 import 해 재사용한다.
+  get_report_detail   : bar 클릭 → report_stoploss 행 반환 (Top Show / Rawdata 공용)
+  get_eqp_loss_detail : Top Show rank bar 클릭 → tpm_eqp_loss 행 반환
+  _calc_loss_min      : start_time ~ end_time 차이(분) Python 계산
 """
-
 import logging
+import datetime
+from typing import Optional
+
+from django.db.models import Q
+
+from stoploss_ai.models import TpmEqpLoss, StoplossReport
+from stoploss_ai.services.filter_service import build_q
+from interlock_ai.services.detail_service import get_date_range
+
 logger = logging.getLogger(__name__)
 
-from stoploss_ai.models import EqpLossTpm
-from stoploss_ai.services.filter_service import build_q
-from spotfire_ai.services.detail_service import get_date_range  # 날짜 범위 계산 재사용
+# ── 노출 컬럼 ─────────────────────────────────────────────────────
+# Rawdata 패널: report_stoploss 에서 표시할 컬럼
+RAW_COLUMNS = ["eqp_id", "stoploss", "plan_time"]
 
-# ─────────────────────────────────────────────────────────────────
-# raw detail 응답에 포함할 컬럼 목록
-# ─────────────────────────────────────────────────────────────────
-RAW_COLUMNS = [
-    "yyyymmdd",
-    "act_time",
-    "line",
-    "sdwt_prod",
-    "eqp_id",
-    "unit_id",
-    "eqp_model",
-    "param_type",
-    "param_name",
-    "loss_time",
-    "lot_id",
+# Top Show 집계에 사용할 report_stoploss 필드 (그룹키 + 손실값 + 메타)
+REPORT_DETAIL_FIELDS = [
+    "area", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
+    "plan_time",
+    "stoploss", "pm", "qual", "bm", "eng", "etc", "stepchg", "std_time", "rd",
+    "rank",
 ]
 
-# 조회 최대 row 수 (성능 보호)
+# Top Show rank bar 클릭 → tpm_eqp_loss 컬럼
+EQP_LOSS_COLUMNS = [
+    "yyyymmdd", "eqp_id", "start_time", "end_time",
+    "state", "down_comment", "loss_time_min",
+]
+
 MAX_RAW_ROWS = 5000
 
+_DATETIME_FMTS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y%m%d%H%M%S",
+    "%Y%m%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+]
 
-def get_loss_detail(flag: str, yyyy: str, flagdate: str, filters: dict) -> list:
+
+# ── 내부 헬퍼 ─────────────────────────────────────────────────────
+
+def _parse_dt(s: str) -> Optional[datetime.datetime]:
+    if not s:
+        return None
+    s = str(s).strip()
+    for fmt in _DATETIME_FMTS:
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _calc_loss_min(start_str: str, end_str: str) -> Optional[float]:
+    start = _parse_dt(start_str)
+    end   = _parse_dt(end_str)
+    if start is None or end is None:
+        return None
+    diff = (end - start).total_seconds() / 60
+    return None if diff < 0 else round(diff, 1)
+
+
+# ── 공개 함수 ─────────────────────────────────────────────────────
+
+def get_report_detail(flag: str, yyyy: str, flagdate: str, filters: dict) -> list:
     """
-    (flag, yyyy, flagdate) + sidebar 필터 기준으로 eqp_loss_tpm 데이터를 조회한다.
+    bar 클릭 시 report_stoploss 에서 해당 (flag, yyyy, flagdate) 행을 반환한다.
 
-    반환: dict list (각 dict 는 RAW_COLUMNS 에 정의된 컬럼만 포함)
-    loss_time 기준 내림차순 정렬.
+    - Rawdata 패널: eqp_id / stoploss / plan_time 표시 (RAW_COLUMNS)
+    - Top Show 패널: area / sdwt_prod / eqp_model 등 그룹 컬럼 + 손실값으로 집계
+    """
+    q = Q(flag=flag, yyyy=yyyy, flagdate=flagdate) & build_q(filters)
+    qs = (
+        StoplossReport.objects
+        .filter(q)
+        .values(*REPORT_DETAIL_FIELDS)
+        .order_by("rank")
+    )
+    rows = [dict(r) for r in qs]
+    logger.info(
+        "[ReportDetail] flag=%s flagdate=%s filters=%s → %d건",
+        flag, flagdate, filters, len(rows),
+    )
+    return rows
+
+
+def get_eqp_loss_detail(flag: str, yyyy: str, flagdate: str, eqp_ids: list) -> list:
+    """
+    Top Show rank bar 클릭 시 tpm_eqp_loss 에서 해당 기간 + eqp_id 조건으로 행을 반환한다.
+    eqp_ids 가 비어있으면 해당 기간 전체를 반환한다.
     """
     start_ymd, end_ymd = get_date_range(flag, yyyy, flagdate)
-
     if start_ymd is None:
-        logger.warning(
-            "get_date_range 반환 None | flag=%s yyyy=%s flagdate=%s",
-            flag, yyyy, flagdate,
-        )
         return []
 
-    q = build_q(filters)
+    q = Q(yyyymmdd__gte=start_ymd, yyyymmdd__lte=end_ymd)
+    if eqp_ids:
+        q &= Q(eqp_id__in=eqp_ids)
 
     qs = (
-        EqpLossTpm.objects
+        TpmEqpLoss.objects
         .filter(q)
-        .filter(yyyymmdd__gte=start_ymd, yyyymmdd__lte=end_ymd)
-        .values(*RAW_COLUMNS)
-        .order_by("-loss_time")[:MAX_RAW_ROWS]
+        .values("yyyymmdd", "eqp_id", "start_time", "end_time", "state", "down_comment")
+        .order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS]
     )
 
-    rows = list(qs)
+    rows = []
+    for row in qs:
+        rows.append({
+            "yyyymmdd":      row["yyyymmdd"],
+            "eqp_id":        row["eqp_id"],
+            "start_time":    row["start_time"],
+            "end_time":      row["end_time"],
+            "state":         row["state"],
+            "down_comment":  row["down_comment"],
+            "loss_time_min": _calc_loss_min(row["start_time"], row["end_time"]),
+        })
 
-    logger.info("[StoplossDetail] flag=%s flagdate=%s 조회 결과 %d건", flag, flagdate, len(rows))
-
+    logger.info(
+        "[EqpLossDetail] flag=%s flagdate=%s eqp_ids=%s → %d건",
+        flag, flagdate, eqp_ids, len(rows),
+    )
     return rows

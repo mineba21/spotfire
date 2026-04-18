@@ -17,7 +17,7 @@ import logging
 import datetime
 logger = logging.getLogger(__name__)
 
-from spotfire_ai.models import SpotfireRaw
+from interlock_ai.models import SpotfireRaw
 from .filter_service import build_filter_q
 
 # ─────────────────────────────────────────────────────────────────

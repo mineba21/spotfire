@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Hub</title>
+  <style>
+    /* ── 변수 ── */
+    :root {
+      --bg:        #f1f5f9;
+      --surface:   #ffffff;
+      --border:    #e2e8f0;
+      --text:      #0f172a;
+      --text-sub:  #64748b;
+      --primary:   #6366f1;
+      --primary-h: #4f46e5;
+      --shadow:    0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+      --shadow-h:  0 4px 12px rgba(99,102,241,.18), 0 8px 32px rgba(0,0,0,.1);
+      --radius:    16px;
+      --transition: .2s ease;
+    }
+    html[data-theme="dark"] {
+      --bg:       #0f172a;
+      --surface:  #1e293b;
+      --border:   #334155;
+      --text:     #f1f5f9;
+      --text-sub: #94a3b8;
+      --shadow:   0 1px 3px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+      --shadow-h: 0 4px 12px rgba(99,102,241,.3), 0 8px 32px rgba(0,0,0,.4);
+    }
+
+    /* ── 리셋 ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      transition: background var(--transition), color var(--transition);
+    }
+
+    /* ── 헤더 ── */
+    .hub-header {
+      text-align: center;
+      margin-bottom: 52px;
+    }
+    .hub-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .hub-logo__icon {
+      width: 48px; height: 48px;
+      background: var(--primary);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 14px rgba(99,102,241,.4);
+    }
+    .hub-logo__icon svg { color: #fff; }
+    .hub-logo__name {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+      color: var(--text);
+    }
+    .hub-title {
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -.03em;
+      line-height: 1.2;
+      color: var(--text);
+    }
+    .hub-title span { color: var(--primary); }
+    .hub-sub {
+      margin-top: 10px;
+      font-size: 15px;
+      color: var(--text-sub);
+      line-height: 1.6;
+    }
+
+    /* ── 카드 그리드 ── */
+    .hub-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 360px));
+      gap: 24px;
+      justify-content: center;
+      width: 100%;
+      max-width: 820px;
+    }
+
+    /* ── 카드 ── */
+    .hub-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      box-shadow: var(--shadow);
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+    .hub-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--card-accent, var(--primary));
+      opacity: 0;
+      transition: opacity var(--transition);
+    }
+    .hub-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-h);
+      border-color: var(--card-accent, var(--primary));
+    }
+    .hub-card:hover::before { opacity: 1; }
+
+    .hub-card--interlock { --card-accent: #6366f1; }
+    .hub-card--stoploss  { --card-accent: #10b981; }
+
+    /* ── 카드 아이콘 ── */
+    .hub-card__icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .hub-card--interlock .hub-card__icon {
+      background: rgba(99,102,241,.12);
+      color: #6366f1;
+    }
+    .hub-card--stoploss .hub-card__icon {
+      background: rgba(16,185,129,.12);
+      color: #10b981;
+    }
+
+    /* ── 카드 내용 ── */
+    .hub-card__body { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+    .hub-card__title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .hub-card__desc {
+      font-size: 13px;
+      color: var(--text-sub);
+      line-height: 1.65;
+    }
+
+    /* ── 태그 리스트 ── */
+    .hub-card__tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .hub-tag {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      letter-spacing: .02em;
+    }
+    .hub-card--interlock .hub-tag {
+      background: rgba(99,102,241,.1);
+      color: #6366f1;
+    }
+    .hub-card--stoploss .hub-tag {
+      background: rgba(16,185,129,.1);
+      color: #10b981;
+    }
+
+    /* ── 카드 푸터 ── */
+    .hub-card__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .hub-card__cta {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .hub-card--interlock .hub-card__cta { color: #6366f1; }
+    .hub-card--stoploss  .hub-card__cta { color: #10b981; }
+    .hub-card__arrow {
+      transition: transform var(--transition);
+    }
+    .hub-card:hover .hub-card__arrow { transform: translateX(4px); }
+
+    /* ── 푸터 ── */
+    .hub-footer {
+      margin-top: 56px;
+      font-size: 12px;
+      color: var(--text-sub);
+      text-align: center;
+      opacity: .7;
+    }
+
+    /* ── 테마 토글 ── */
+    .theme-btn {
+      position: fixed;
+      top: 20px; right: 20px;
+      width: 36px; height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background var(--transition), border-color var(--transition);
+      box-shadow: var(--shadow);
+    }
+    .theme-btn:hover { border-color: var(--primary); }
+    .theme-btn svg { color: var(--text-sub); }
+    html[data-theme="light"] .icon-moon { display: block; }
+    html[data-theme="light"] .icon-sun  { display: none;  }
+    html[data-theme="dark"]  .icon-sun  { display: block; }
+    html[data-theme="dark"]  .icon-moon { display: none;  }
+  </style>
+</head>
+<body>
+
+  <!-- 테마 토글 -->
+  <button class="theme-btn" onclick="toggleTheme()" title="테마 전환">
+    <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <svg class="icon-sun"  width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+  </button>
+
+  <!-- 헤더 -->
+  <header class="hub-header">
+    <div class="hub-logo">
+      <div class="hub-logo__icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="hub-logo__name">SF Dashboard</span>
+    </div>
+    <h1 class="hub-title">Manufacturing <span>Analytics</span></h1>
+    <p class="hub-sub">설비 데이터 분석 대시보드 허브<br>분석할 레포트를 선택하세요.</p>
+  </header>
+
+  <!-- 카드 그리드 -->
+  <main class="hub-grid">
+
+    <!-- 인터락 분석 -->
+    <a href="/interlock-ai/" class="hub-card hub-card--interlock">
+      <div class="hub-card__icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </div>
+
+      <div class="hub-card__body">
+        <div class="hub-card__title">Interlock Analysis</div>
+        <div class="hub-card__desc">
+          설비 인터락 발생 건수 및 추이를 월·주·일 단위로 분석합니다.<br>
+          라인·설비·파라미터 타입별 필터와 AI 질의를 지원합니다.
+        </div>
+        <div class="hub-card__tags">
+          <span class="hub-tag">M / W / D</span>
+          <span class="hub-tag">Param Type</span>
+          <span class="hub-tag">AI Copilot</span>
+          <span class="hub-tag">Top Show</span>
+        </div>
+      </div>
+
+      <div class="hub-card__footer">
+        <span class="hub-card__cta">
+          대시보드 열기
+          <svg class="hub-card__arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </span>
+        <span style="font-size:11px; color:var(--text-sub);">/interlock-ai/</span>
+      </div>
+    </a>
+
+    <!-- 정지로스 분석 -->
+    <a href="/stoploss-ai/" class="hub-card hub-card--stoploss">
+      <div class="hub-card__icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+
+      <div class="hub-card__body">
+        <div class="hub-card__title">Stoploss Analysis</div>
+        <div class="hub-card__desc">
+          설비 정지로스 시간을 월·주·일 단위로 집계하고 손실 원인을 분석합니다.<br>
+          min / % 모드 전환, State 기여도 분석을 제공합니다.
+        </div>
+        <div class="hub-card__tags">
+          <span class="hub-tag">M / W / D</span>
+          <span class="hub-tag">Min / %</span>
+          <span class="hub-tag">Ratio Analysis</span>
+          <span class="hub-tag">EQP Loss</span>
+        </div>
+      </div>
+
+      <div class="hub-card__footer">
+        <span class="hub-card__cta">
+          대시보드 열기
+          <svg class="hub-card__arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </span>
+        <span style="font-size:11px; color:var(--text-sub);">/stoploss-ai/</span>
+      </div>
+    </a>
+
+  </main>
+
+  <!-- 푸터 -->
+  <footer class="hub-footer">
+    SF Dashboard · Manufacturing Analytics Platform
+  </footer>
+
+  <script>
+    // 테마 유지
+    (function () {
+      const saved = localStorage.getItem("sf-theme");
+      const pref  = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", saved || pref);
+    })();
+
+    function toggleTheme() {
+      const cur = document.documentElement.getAttribute("data-theme") || "light";
+      const next = cur === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      localStorage.setItem("sf-theme", next);
+    }
+  </script>
+</body>
+</html>

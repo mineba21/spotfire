@@ -18,8 +18,8 @@ from __future__ import annotations
 import datetime
 from django.db.models import Q, Count, Avg, Sum, Max, Min
 
-from spotfire_ai.models import SpotfireRaw, SpotfireReport, TABLE_RAW, TABLE_REPORT
-from spotfire_ai.services.detail_service import get_date_range
+from interlock_ai.models import SpotfireRaw, SpotfireReport, TABLE_RAW, TABLE_REPORT
+from interlock_ai.services.detail_service import get_date_range
 
 # ─────────────────────────────────────────────────────────────────
 # 상수

@@ -5,7 +5,7 @@ stoploss 테이블에 대한 쿼리를 실행한다.
 spotfire_ai 의 query_builder.py 와 동일한 execute_query 인터페이스.
 """
 from django.db.models import Count, Avg, Sum, Max, Min, Q
-from stoploss_ai.models import EqpLossTpm, StoplossReport, TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT
+from stoploss_ai.models import TpmEqpLoss, StoplossReport, TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT
 
 AGG_FUNC_MAP = {
     "count": Count,
@@ -24,7 +24,7 @@ def execute_stoploss_query(qj: dict) -> list:
     """
     table = qj.get("table")
     if table == TABLE_EQP_LOSS:
-        qs = EqpLossTpm.objects.all()
+        qs = TpmEqpLoss.objects.all()
     elif table == TABLE_STOPLOSS_REPORT:
         qs = StoplossReport.objects.all()
     else:
@@ -68,7 +68,7 @@ def execute_stoploss_query(qj: dict) -> list:
 
 
 def _build_q(filters: dict, table: str) -> Q:
-    from spotfire_ai.services.detail_service import get_date_range
+    from interlock_ai.services.detail_service import get_date_range
     q = Q()
 
     for field, value in filters.items():

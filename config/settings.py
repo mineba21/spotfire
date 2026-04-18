@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # spotfire 분석 앱
-    'spotfire_ai',
+    'interlock_ai',
     # 정지로스 분석 앱
     'stoploss_ai',
 ]
@@ -59,7 +59,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -110,8 +110,25 @@ DATABASES = {
     #     'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
     #     'PORT': os.environ.get('DB_PORT', '3306'),
     # },
+    # ── tpm DB (stoploss_ai 전용) ─────────────────────────────────
+    # 운영: TPM_DB_ENGINE=django.db.backends.mysql + MySQL 접속 정보 설정
+    # 개발: 환경변수 미설정 시 default(SQLite) 와 같은 파일 사용
+    "tpm": {
+        "ENGINE":   os.environ.get("TPM_DB_ENGINE", "django.db.backends.sqlite3"),
+        "NAME":     os.environ.get("TPM_DB_NAME",     str(BASE_DIR / "db.sqlite3")),
+        "USER":     os.environ.get("TPM_DB_USER",     os.environ.get("DB_USER", "root")),
+        "PASSWORD": os.environ.get("TPM_DB_PASSWORD", os.environ.get("DB_PASSWORD", "")),
+        "HOST":     os.environ.get("TPM_DB_HOST",     os.environ.get("DB_HOST", "127.0.0.1")),
+        "PORT":     os.environ.get("TPM_DB_PORT",     os.environ.get("DB_PORT", "3306")),
+        "OPTIONS":  {"charset": "utf8mb4"} if os.environ.get("TPM_DB_ENGINE") else {},
+    },
 }
+ 
+# ── DB 라우터 등록 ────────────────────────────────────────────────
+# stoploss_ai 앱의 모든 모델을 자동으로 "tpm" DB 로 라우팅한다
+DATABASE_ROUTERS = ["config.db_router.TpmRouter"]
 
+ 
 # ─────────────────────────────────────────────────────────────────
 # LLM 백엔드 설정
 # 테스트 환경: "mock"  |  운영 환경: "openai" (OPENAI_API_KEY 필요)

@@ -15,7 +15,7 @@ services/chart_service.py
 """
 
 from collections import defaultdict
-from spotfire_ai.models import SpotfireReport
+from interlock_ai.models import SpotfireReport
 from .filter_service import build_filter_q
 
 # ─────────────────────────────────────────────────────────────────

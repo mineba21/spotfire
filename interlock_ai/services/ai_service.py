@@ -10,7 +10,7 @@ services/ai_service.py
     LOGGING = {
         'version': 1,
         'handlers': {'console': {'class': 'logging.StreamHandler'}},
-        'loggers': {'spotfire_ai': {'handlers': ['console'], 'level': 'DEBUG'}},
+        'loggers': {'interlock_ai': {'handlers': ['console'], 'level': 'DEBUG'}},
     }
 
   로그 검색 키워드:
@@ -28,10 +28,10 @@ import copy
 import json
 import logging
 
-from spotfire_ai.models import TABLE_RAW
-from spotfire_ai.services.llm_interface import get_llm_client
-from spotfire_ai.services.json_validator import validate_query_json
-from spotfire_ai.services.query_builder  import execute_query
+from interlock_ai.models import TABLE_RAW
+from interlock_ai.services.llm_interface import get_llm_client
+from interlock_ai.services.json_validator import validate_query_json
+from interlock_ai.services.query_builder  import execute_query
 
 logger = logging.getLogger(__name__)
 

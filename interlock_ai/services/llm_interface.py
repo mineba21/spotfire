@@ -38,7 +38,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from django.conf import settings
-from spotfire_ai.models import TABLE_RAW, TABLE_REPORT
+from interlock_ai.models import TABLE_RAW, TABLE_REPORT
 
 logger = logging.getLogger(__name__)
 

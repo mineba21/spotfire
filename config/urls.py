@@ -1,18 +1,24 @@
 """
 config/urls.py  (프로젝트 루트 URL 설정)
 
-spotfire_ai 앱의 URL을 /spotfire-ai/ 아래에 마운트한다.
-앱이 늘어날 경우 이 파일에 include() 를 추가하면 된다.
+URL 구조:
+  /                → 메인 허브 페이지 (각 대시보드 링크)
+  /interlock-ai/   → 인터락 분석 대시보드
+  /stoploss-ai/    → 정지로스 분석 대시보드
 """
 from django.contrib import admin
 from django.urls import path, include
+from config.views import home
 
 urlpatterns = [
+    # ── 메인 허브 페이지 ──────────────────────────────────────────
+    path("", home, name="home"),
+
     path("admin/", admin.site.urls),
 
-    # spotfire_ai 앱: /spotfire-ai/ 하위 모든 URL
-    path("spotfire-ai/", include("spotfire_ai.urls")),
+    # ── 인터락 분석 ───────────────────────────────────────────────
+    path("interlock-ai/", include("interlock_ai.urls")),
 
-    # stoploss_ai 앱: /stoploss-ai/ 하위 모든 URL
+    # ── 정지로스 분석 ─────────────────────────────────────────────
     path("stoploss-ai/", include("stoploss_ai.urls")),
 ]
