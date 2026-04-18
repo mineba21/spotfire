@@ -3,6 +3,11 @@
 Django 기반 설비 이상(인터락) 현황 분석 웹 대시보드.  
 TIBCO Spotfire Report 형식의 M/W/D Chart + AI Copilot(LLM) 통합.
 
+
+## 협업 문서
+
+- Codex/Claude Code 공용 협업 가이드: `COLLAB_CODEFLOW.md`
+
 ---
 
 ## 업데이트 필요 파일 목록
