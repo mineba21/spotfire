@@ -23,7 +23,11 @@ FILTER_FIELDS = [
     "eqp_model",
     "eqp_id",
     "param_type",
+    "param_name",   # SpotfireRaw 전용 (SpotfireReport 필터에서는 제외)
 ]
+
+# SpotfireReport 에 없는 필드 목록 — chart_service 에서 제외해야 한다
+REPORT_EXCLUDED_FIELDS = {"param_name"}
 
 # ALL 을 의미하는 특수 값
 ALL_VALUE = "ALL"

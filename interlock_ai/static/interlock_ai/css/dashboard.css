@@ -854,6 +854,32 @@ html[data-theme="dark"] .sf-table tbody tr:nth-child(even) td { background: rgba
 .sf-table tbody tr:hover > td { background: var(--sf-primary-soft); }
 .sf-table tbody tr:last-child td { border-bottom: none; }
 
+/* ── 정렬 가능한 헤더 ── */
+.sf-table th.sf-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.sf-table th.sf-sortable:hover {
+  color: var(--sf-primary);
+  background: var(--sf-primary-soft);
+}
+.sf-table th.sf-sortable::after {
+  content: " ⇅";
+  opacity: 0.25;
+  font-size: 9px;
+  margin-left: 2px;
+}
+.sf-table th[data-sort="asc"]::after {
+  content: " ▲";
+  opacity: 1;
+  color: var(--sf-primary);
+}
+.sf-table th[data-sort="desc"]::after {
+  content: " ▼";
+  opacity: 1;
+  color: var(--sf-primary);
+}
+
 .sf-table-empty {
   display: flex;
   flex-direction: column;

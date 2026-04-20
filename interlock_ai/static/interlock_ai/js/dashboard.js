@@ -36,6 +36,53 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+// 숫자 컬럼 집합 (우측 정렬 + 천단위 포맷)
+const NUMERIC_COLS = new Set(["loss_time_min", "cnt", "count"]);
+
+// 컬럼 key → 표시 레이블 매핑
+const COL_LABELS = {
+  eqp_id:        "EQP ID",
+  param_type:    "Param Type",
+  param_name:    "Param Name",
+  loss_time_min: "Loss (min)",
+  line:          "Line",
+  cnt:           "Count",
+};
+
+// ── 정렬 유틸 ─────────────────────────────────────────────────
+
+const _sortState = {};
+
+function _sortRows(rows, col, dir) {
+  return [...rows].sort((a, b) => {
+    const va = a[col], vb = b[col];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const cmp = (typeof va === "number" && typeof vb === "number")
+      ? va - vb
+      : String(va).localeCompare(String(vb), undefined, { numeric: true });
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
+
+function _attachSorting(thead, columns, tableId, getRows, renderBody) {
+  if (!_sortState[tableId]) _sortState[tableId] = { col: null, dir: "asc" };
+  const ss = _sortState[tableId];
+  Array.from(thead.querySelectorAll("th")).forEach((th, i) => {
+    const col = columns[i];
+    th.classList.add("sf-sortable");
+    th.addEventListener("click", () => {
+      if (ss.col === col) { ss.dir = ss.dir === "asc" ? "desc" : "asc"; }
+      else { ss.col = col; ss.dir = "asc"; }
+      Array.from(thead.querySelectorAll("th")).forEach((h) => h.removeAttribute("data-sort"));
+      th.setAttribute("data-sort", ss.dir);
+      renderBody(_sortRows(getRows(), ss.col, ss.dir));
+    });
+    if (ss.col === col) th.setAttribute("data-sort", ss.dir);
+  });
+}
+
 // param_type DB 값 → 표시 레이블 매핑
 // DB 값(A/E/T/M)은 필터 전송 시 그대로 사용하고, 화면 표시만 변환한다.
 const PARAM_TYPE_LABEL = { A: "Alarm", E: "ERD", T: "Trace", M: "MCC" };
@@ -126,7 +173,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // y_field 는 cnt 고정 (인터락 페이지는 count 만 사용)
 
   // 필터 select 변경 시 옵션 동적 갱신 (차트 자동 새로고침 없음)
-  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
+  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType", "filterParamName"]
     .forEach((id) => on(id, "change", refreshFilterOptions));
 
   document.querySelectorAll('input[name="detailMode"]').forEach((radio) => {
@@ -211,6 +258,7 @@ function collectFilters() {
   addMultiSelect("filterEqpModel",  "eqp_model");
   addMultiSelect("filterEqpId",     "eqp_id");
   addMultiSelect("filterParamType", "param_type");
+  addMultiSelect("filterParamName", "param_name");
 
   params.append("m_rank", document.getElementById("rankM").value || 999);
   params.append("w_rank", document.getElementById("rankW").value || 999);
@@ -236,6 +284,7 @@ function collectFiltersAsDict() {
   addMultiSelect("filterEqpModel",  "eqp_model");
   addMultiSelect("filterEqpId",     "eqp_id");
   addMultiSelect("filterParamType", "param_type");
+  addMultiSelect("filterParamName", "param_name");
 
   return result;
 }
@@ -274,6 +323,7 @@ async function refreshFilterOptions() {
   _rebuildSelect("filterEqpModel",  data.eqp_models,  "eqp_model");
   _rebuildSelect("filterEqpId",     data.eqp_ids,     "eqp_id");
   _rebuildSelect("filterParamType", data.param_types, "param_type");
+  _rebuildSelect("filterParamName", data.param_names, "param_name");
 }
 
 /**
@@ -326,7 +376,7 @@ function _rebuildSelect(selectId, newValues, fieldName) {
 }
 
 function resetFilters() {
-  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType"]
+  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType", "filterParamName"]
     .forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -492,6 +542,10 @@ async function fetchClickDetail() {
     state.rawRows    = json.data.rows    || [];
     state.rawColumns = json.data.columns || [];
 
+    // reset sort state so previous column sort doesn't carry over to new data
+    delete _sortState["rawTable"];
+    delete _sortState["topRawTable"];
+
     const countEl = document.getElementById("detailCount");
     if (countEl) {
       countEl.textContent = `총 ${(json.data.total || 0).toLocaleString()}건`;
@@ -551,40 +605,57 @@ function renderRawTable() {
 
   const headerRow = document.createElement("tr");
   state.rawColumns.forEach((col) => {
-    const th = document.createElement("th");
-    th.textContent = col;
-    th.title       = col;
+    const th    = document.createElement("th");
+    const label = COL_LABELS[col] || col;
+    th.textContent = label;
+    th.title       = label;
+    if (NUMERIC_COLS.has(col)) th.style.textAlign = "right";
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
 
-  const visibleRows = state.rawRows.slice(0, MAX_RENDER_ROWS);
-  const fragment    = document.createDocumentFragment();
-
-  visibleRows.forEach((row) => {
-    const tr = document.createElement("tr");
-    state.rawColumns.forEach((col) => {
-      const td  = document.createElement("td");
-      const val = row[col];
-      td.textContent = (val != null)
-        ? (col === "param_type" ? ptLabel(String(val)) : val)
-        : "";
-      if (typeof val === "number") td.style.textAlign = "right";
-      tr.appendChild(td);
+  function _doRenderRawBody(rows) {
+    tbody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    rows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+      const tr = document.createElement("tr");
+      state.rawColumns.forEach((col) => {
+        const td  = document.createElement("td");
+        const val = row[col];
+        if (NUMERIC_COLS.has(col)) {
+          td.style.textAlign = "right";
+          td.textContent = (val != null)
+            ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : "-";
+        } else {
+          td.textContent = (val != null && val !== "")
+            ? (col === "param_type" ? ptLabel(String(val)) : val)
+            : "-";
+        }
+        tr.appendChild(td);
+      });
+      fragment.appendChild(tr);
     });
-    fragment.appendChild(tr);
-  });
-  tbody.appendChild(fragment);
+    tbody.appendChild(fragment);
 
-  if (state.rawRows.length > MAX_RENDER_ROWS) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan     = state.rawColumns.length;
-    td.className   = "sf-table-truncate-msg";
-    td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${state.rawRows.length.toLocaleString()}건)`;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
+    if (rows.length > MAX_RENDER_ROWS) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan     = state.rawColumns.length;
+      td.className   = "sf-table-truncate-msg";
+      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
   }
+
+  _attachSorting(thead, state.rawColumns, "rawTable", () => state.rawRows, _doRenderRawBody);
+
+  const ss = _sortState["rawTable"];
+  const initialRows = (ss && ss.col)
+    ? _sortRows(state.rawRows, ss.col, ss.dir)
+    : state.rawRows;
+  _doRenderRawBody(initialRows);
 }
 
 // ── Top Show (cnt 기반 그룹 집계) ────────────────────────────
@@ -811,41 +882,61 @@ function _renderTopRaw(rows, badgeText) {
   const columns   = state.rawColumns.length ? state.rawColumns : Object.keys(rows[0]);
   const headerRow = document.createElement("tr");
   columns.forEach((col) => {
-    const th       = document.createElement("th");
-    th.textContent = col;
-    th.title       = col;
+    const th    = document.createElement("th");
+    const label = COL_LABELS[col] || col;
+    th.textContent = label;
+    th.title       = label;
+    if (NUMERIC_COLS.has(col)) th.style.textAlign = "right";
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
 
-  // 바디 (최대 500건)
-  tbody.innerHTML = "";
-  const fragment  = document.createDocumentFragment();
-  const visible   = rows.slice(0, MAX_RENDER_ROWS);
+  // local copy for sort callback
+  let _topRawRows = rows;
 
-  visible.forEach((row) => {
-    const tr = document.createElement("tr");
-    columns.forEach((col) => {
-      const td  = document.createElement("td");
-      const val = row[col];
-      td.textContent = (val != null) ? val : "";
-      if (typeof val === "number") td.style.textAlign = "right";
-      tr.appendChild(td);
+  function _doRenderTopRawBody(sortedRows) {
+    tbody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    sortedRows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+      const tr = document.createElement("tr");
+      columns.forEach((col) => {
+        const td  = document.createElement("td");
+        const val = row[col];
+        if (NUMERIC_COLS.has(col)) {
+          td.style.textAlign = "right";
+          td.textContent = (val != null)
+            ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : "-";
+        } else {
+          td.textContent = (val != null && val !== "")
+            ? (col === "param_type" ? ptLabel(String(val)) : val)
+            : "-";
+        }
+        tr.appendChild(td);
+      });
+      fragment.appendChild(tr);
     });
-    fragment.appendChild(tr);
-  });
-  tbody.appendChild(fragment);
+    tbody.appendChild(fragment);
 
-  // 행 수 초과 안내
-  if (rows.length > MAX_RENDER_ROWS) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan     = columns.length;
-    td.className   = "sf-table-truncate-msg";
-    td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
+    // 행 수 초과 안내
+    if (sortedRows.length > MAX_RENDER_ROWS) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan     = columns.length;
+      td.className   = "sf-table-truncate-msg";
+      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${sortedRows.length.toLocaleString()}건)`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
   }
+
+  _attachSorting(thead, columns, "topRawTable", () => _topRawRows, _doRenderTopRawBody);
+
+  const ss = _sortState["topRawTable"];
+  const initialRows = (ss && ss.col)
+    ? _sortRows(_topRawRows, ss.col, ss.dir)
+    : _topRawRows;
+  _doRenderTopRawBody(initialRows);
 }
 
 /**

@@ -88,6 +88,17 @@
     </select>
   </div>
 
+  <!-- Param Name -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterParamName">Param Name</label>
+    <select id="filterParamName" name="param_name" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.param_names %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
   <!-- Buttons -->
   <div class="sf-sidebar__footer">
     <button id="applyFilterBtn" class="sf-btn sf-btn--primary">

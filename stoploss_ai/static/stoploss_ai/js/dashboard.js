@@ -38,6 +38,57 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+// ── 테이블 정렬 상태 (테이블 ID → { col, dir }) ──────────────────
+const _sortState = {};
+
+/**
+ * 컬럼 배열을 기준으로 rows를 정렬한 복사본을 반환한다.
+ */
+function _sortRows(rows, col, dir) {
+  return [...rows].sort((a, b) => {
+    const va = a[col], vb = b[col];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const cmp = (typeof va === "number" && typeof vb === "number")
+      ? va - vb
+      : String(va).localeCompare(String(vb), undefined, { numeric: true });
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
+
+/**
+ * thead의 th에 정렬 클릭 핸들러를 붙인다.
+ * @param {HTMLElement} thead
+ * @param {string[]} columns  - th 순서와 일치하는 컬럼 키 배열
+ * @param {string} tableId    - 정렬 상태 키 (예: "rawTable")
+ * @param {Function} renderBody - 정렬 후 tbody를 재렌더하는 콜백 (rows) => void
+ * @param {Function} getRows  - 원본 rows 배열을 반환하는 콜백 () => rows
+ */
+function _attachSorting(thead, columns, tableId, getRows, renderBody) {
+  if (!_sortState[tableId]) _sortState[tableId] = { col: null, dir: "asc" };
+  const ss = _sortState[tableId];
+
+  Array.from(thead.querySelectorAll("th")).forEach((th, i) => {
+    const col = columns[i];
+    th.classList.add("sf-sortable");
+    th.addEventListener("click", () => {
+      if (ss.col === col) {
+        ss.dir = ss.dir === "asc" ? "desc" : "asc";
+      } else {
+        ss.col = col;
+        ss.dir = "asc";
+      }
+      Array.from(thead.querySelectorAll("th")).forEach((h) => h.removeAttribute("data-sort"));
+      th.setAttribute("data-sort", ss.dir);
+      renderBody(_sortRows(getRows(), ss.col, ss.dir));
+    });
+
+    // 현재 정렬 상태 복원
+    if (ss.col === col) th.setAttribute("data-sort", ss.dir);
+  });
+}
+
 // Rawdata 테이블에서 숫자로 취급해 우측 정렬할 컬럼 목록
 const NUMERIC_COLS = new Set([
   "stoploss", "pm", "qual", "bm", "eng", "etc", "stepchg", "std_time", "rd",
@@ -487,6 +538,10 @@ async function fetchClickDetail() {
     state.rawColumns = json.data.columns || [];
     state.ratioRows  = json.data.ratio   || [];
 
+    // reset sort state so previous column sort doesn't carry over to new data
+    delete _sortState["rawTable"];
+    delete _sortState["topRawTable"];
+
     const countEl = document.getElementById("detailCount");
     if (countEl) {
       countEl.textContent = `총 ${(json.data.total || 0).toLocaleString()}건`;
@@ -557,37 +612,46 @@ function renderRawTable() {
   });
   thead.appendChild(headerRow);
 
-  const visibleRows = state.rawRows.slice(0, MAX_RENDER_ROWS);
-  const fragment    = document.createDocumentFragment();
-
-  visibleRows.forEach((row) => {
-    const tr = document.createElement("tr");
-    state.rawColumns.forEach((col) => {
-      const td  = document.createElement("td");
-      const val = row[col];
-      if (NUMERIC_COLS.has(col)) {
-        td.style.textAlign = "right";
-        td.textContent = (val != null)
-          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
-          : "-";
-      } else {
-        td.textContent = (val != null && val !== "") ? val : "-";
-      }
-      tr.appendChild(td);
+  function _doRenderRawBody(rows) {
+    tbody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    rows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+      const tr = document.createElement("tr");
+      state.rawColumns.forEach((col) => {
+        const td  = document.createElement("td");
+        const val = row[col];
+        if (NUMERIC_COLS.has(col)) {
+          td.style.textAlign = "right";
+          td.textContent = (val != null)
+            ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : "-";
+        } else {
+          td.textContent = (val != null && val !== "") ? val : "-";
+        }
+        tr.appendChild(td);
+      });
+      fragment.appendChild(tr);
     });
-    fragment.appendChild(tr);
-  });
-  tbody.appendChild(fragment);
+    tbody.appendChild(fragment);
 
-  if (state.rawRows.length > MAX_RENDER_ROWS) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan     = state.rawColumns.length;
-    td.className   = "sf-table-truncate-msg";
-    td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${state.rawRows.length.toLocaleString()}건)`;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
+    if (rows.length > MAX_RENDER_ROWS) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan     = state.rawColumns.length;
+      td.className   = "sf-table-truncate-msg";
+      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
   }
+
+  _attachSorting(thead, state.rawColumns, "rawTable", () => state.rawRows, _doRenderRawBody);
+
+  const ss = _sortState["rawTable"];
+  const initialRows = (ss && ss.col)
+    ? _sortRows(state.rawRows, ss.col, ss.dir)
+    : state.rawRows;
+  _doRenderRawBody(initialRows);
 }
 
 // ── Top Show (report_stoploss 기반 그룹 집계) ────────────────
@@ -778,39 +842,49 @@ function _renderTopRaw(rows, badgeText, columns) {
   });
   thead.appendChild(headerRow);
 
-  tbody.innerHTML = "";
-  const fragment  = document.createDocumentFragment();
-  const visible   = rows.slice(0, MAX_RENDER_ROWS);
+  // keep a local copy of rows for sort callbacks
+  let _topRawRows = rows;
 
-  visible.forEach((row) => {
-    const tr = document.createElement("tr");
-    cols.forEach((col) => {
-      const td  = document.createElement("td");
-      const val = row[col];
-      if (NUMERIC_COLS.has(col)) {
-        td.style.textAlign = "right";
-        td.textContent = (val != null)
-          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
-          : "-";
-      } else {
-        td.textContent = (val != null && val !== "") ? val : "-";
-      }
-      tr.appendChild(td);
+  function _doRenderTopRawBody(sortedRows) {
+    tbody.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    sortedRows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+      const tr = document.createElement("tr");
+      cols.forEach((col) => {
+        const td  = document.createElement("td");
+        const val = row[col];
+        if (NUMERIC_COLS.has(col)) {
+          td.style.textAlign = "right";
+          td.textContent = (val != null)
+            ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : "-";
+        } else {
+          td.textContent = (val != null && val !== "") ? val : "-";
+        }
+        tr.appendChild(td);
+      });
+      fragment.appendChild(tr);
     });
-    fragment.appendChild(tr);
-  });
-  tbody.appendChild(fragment);
+    tbody.appendChild(fragment);
 
-  if (rows.length > MAX_RENDER_ROWS) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan     = columns.length;
-    td.className   = "sf-table-truncate-msg";
-    td.colSpan     = cols.length;
-    td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
+    if (sortedRows.length > MAX_RENDER_ROWS) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan     = cols.length;
+      td.className   = "sf-table-truncate-msg";
+      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${sortedRows.length.toLocaleString()}건)`;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
   }
+
+  _attachSorting(thead, cols, "topRawTable", () => _topRawRows, _doRenderTopRawBody);
+
+  const ss = _sortState["topRawTable"];
+  const initialRows = (ss && ss.col)
+    ? _sortRows(_topRawRows, ss.col, ss.dir)
+    : _topRawRows;
+  _doRenderTopRawBody(initialRows);
 }
 
 function closeTopRaw() {

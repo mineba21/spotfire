@@ -16,7 +16,7 @@ services/chart_service.py
 
 from collections import defaultdict
 from interlock_ai.models import SpotfireReport
-from .filter_service import build_filter_q
+from .filter_service import build_filter_q, REPORT_EXCLUDED_FIELDS
 
 # ─────────────────────────────────────────────────────────────────
 # 상수
@@ -59,8 +59,11 @@ def get_chart_data(filters: dict, rank_limits: dict, y_field: str = "cnt") -> di
         values() 안에 원하는 컬럼명을 추가하면 된다.
         단, SpotfireReport 모델에도 해당 필드가 있어야 한다.
     """
+    # SpotfireReport 에 없는 필드(param_name 등)를 필터에서 제외한다
+    report_filters = {k: v for k, v in filters.items() if k not in REPORT_EXCLUDED_FIELDS}
+
     # sidebar 필터 Q 객체 생성
-    q = build_filter_q(filters)
+    q = build_filter_q(report_filters)
 
     # report 테이블 전체 조회 (필터 적용)
     # 컬럼 추가 시: values() 에 컬럼명을 추가하면 된다
