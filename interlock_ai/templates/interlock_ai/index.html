@@ -169,12 +169,13 @@
       <div class="sf-context-bar" id="contextBar" style="display:none;">
         <span class="sf-context-bar__dot"></span>
         <span class="sf-context-bar__label">선택됨</span>
-        <span class="sf-context-bar__badge" id="contextBadge"></span>
+        <!-- dashboard.js 가 chip 리스트를 동적 채움 -->
+        <div class="sf-context-bar__chips" id="contextChips"></div>
         <button class="sf-context-bar__clear" id="contextClearBtn">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
-          초기화
+          전체 초기화
         </button>
       </div>
 

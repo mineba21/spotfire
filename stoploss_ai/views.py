@@ -91,46 +91,49 @@ def api_filter_options(request):
 
 @require_GET
 def api_click_detail(request):
-    flag     = request.GET.get("flag", "")
-    yyyy     = request.GET.get("yyyy", "")
-    flagdate = request.GET.get("flagdate", "")
+    flag      = request.GET.get("flag", "")
+    yyyy      = request.GET.get("yyyy", "")
+    # 멀티 bar 지원: flagdate 가 복수로 올 수 있음 (동일 flag 내)
+    flagdates = request.GET.getlist("flagdate")
+    group_by  = request.GET.get("ratio_group_by", "state").strip() or "state"
 
-    if not all([flag, yyyy, flagdate]) or flag not in VALID_FLAGS:
+    if not all([flag, yyyy]) or not flagdates or flag not in VALID_FLAGS:
         return JsonResponse(
             {"ok": False, "error": "flag, yyyy, flagdate 파라미터가 필요합니다"},
             status=400,
         )
 
     filters = parse_filters(request.GET)
-    rows    = get_report_detail(flag, yyyy, flagdate, filters)
-    ratio   = get_ratio_analysis(flag, yyyy, flagdate, filters)
+    rows    = get_report_detail(flag, yyyy, flagdates, filters)
+    ratio   = get_ratio_analysis(flag, yyyy, flagdates, filters, group_by)
 
     return JsonResponse({
         "ok": True,
         "data": {
-            "rows":    rows,
-            "ratio":   ratio,
-            "columns": RAW_COLUMNS,
-            "total":   len(rows),
+            "rows":            rows,
+            "ratio":           ratio,
+            "ratio_group_by":  group_by,
+            "columns":         RAW_COLUMNS,
+            "total":           len(rows),
         },
     })
 
 
 @require_GET
 def api_eqp_loss_detail(request):
-    """Top Show rank bar 클릭 → tpm_eqp_loss 조회"""
-    flag     = request.GET.get("flag", "")
-    yyyy     = request.GET.get("yyyy", "")
-    flagdate = request.GET.get("flagdate", "")
-    eqp_ids  = request.GET.getlist("eqp_id")
+    """Top Show rank bar 클릭 → tpm_eqp_loss 조회 (복수 flagdate 지원)"""
+    flag      = request.GET.get("flag", "")
+    yyyy      = request.GET.get("yyyy", "")
+    flagdates = request.GET.getlist("flagdate")
+    eqp_ids   = request.GET.getlist("eqp_id")
 
-    if not all([flag, yyyy, flagdate]) or flag not in VALID_FLAGS:
+    if not all([flag, yyyy]) or not flagdates or flag not in VALID_FLAGS:
         return JsonResponse(
             {"ok": False, "error": "flag, yyyy, flagdate 파라미터가 필요합니다"},
             status=400,
         )
 
-    rows = get_eqp_loss_detail(flag, yyyy, flagdate, eqp_ids)
+    rows = get_eqp_loss_detail(flag, yyyy, flagdates, eqp_ids)
     return JsonResponse({
         "ok": True,
         "data": {

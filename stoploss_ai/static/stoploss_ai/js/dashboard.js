@@ -22,6 +22,30 @@
 
 "use strict";
 
+// [TEMP DEBUG] 전역 에러를 토스트로 노출해 무슨 에러가 나는지 즉시 보이게 함
+window.addEventListener("error", (e) => {
+  console.error("[global error]", e.error || e.message, e.filename, e.lineno);
+  try {
+    const el = document.getElementById("sfToast");
+    if (el) {
+      el.textContent = `JS error: ${e.message} (${e.filename}:${e.lineno})`;
+      el.classList.add("sf-toast--show");
+      setTimeout(() => el.classList.remove("sf-toast--show"), 8000);
+    }
+  } catch (_) {}
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("[unhandled rejection]", e.reason);
+  try {
+    const el = document.getElementById("sfToast");
+    if (el) {
+      el.textContent = `JS rejection: ${e.reason?.message || e.reason}`;
+      el.classList.add("sf-toast--show");
+      setTimeout(() => el.classList.remove("sf-toast--show"), 8000);
+    }
+  } catch (_) {}
+});
+
 // ═══════════════════════════════════════════════════════════════
 // 1. 상수
 // ═══════════════════════════════════════════════════════════════
@@ -96,7 +120,10 @@ const NUMERIC_COLS = new Set([
 ]);
 
 // 컬럼 키 → 표시 레이블 (없으면 키를 대문자로 그대로 사용)
+// [컬럼 추가] 새 컬럼을 추가할 때 여기에도 레이블을 추가하면 가독성이 높아진다.
 const COL_LABELS = {
+  flag:         "Flag",
+  flagdate:     "Flag Date",
   eqp_id:       "EQP ID",
   eqp_model:    "EQP Model",
   sdwt_prod:    "SDWT Prod",
@@ -108,6 +135,8 @@ const COL_LABELS = {
   start_time:   "Start",
   end_time:     "End",
   yyyymmdd:     "Date",
+  state:        "State",
+  area:         "Area",
 };
 
 /**
@@ -122,6 +151,23 @@ const TOP_GROUP_OPTIONS = [
   { value: "sdwt_prod",          label: "분임조"             },
 ];
 
+/**
+ * Ratio Analysis 그룹화 기준 목록
+ * [옵션 추가 방법]
+ *   1. 백엔드(ratio_service.py)의 VALID_GROUP_BY 에 컬럼명 추가
+ *   2. ratio_service.py 의 group_key_map 에 해당 컬럼 분기 추가
+ *   3. 여기 RATIO_GROUP_OPTIONS 에 { value, label } 한 줄 추가
+ *   4. (param_type/param_name 은 interlock_raw 조인 구현 후 노출 예정)
+ */
+const RATIO_GROUP_OPTIONS = [
+  { value: "state",     label: "State (원인)"   },
+  { value: "eqp_id",    label: "EQP ID"          },
+  { value: "eqp_model", label: "EQP Model"       },
+  { value: "area",      label: "Area (라인)"     },
+  { value: "sdwt_prod", label: "SDWT Prod (분임조)" },
+  // TODO: param_type / param_name — interlock_raw join 구현 후 활성화
+];
+
 const MSG = {
   MISSING_BAR: "bar 를 먼저 클릭하세요.",
   NET_ERROR:   (msg) => `네트워크 오류: ${msg}`,
@@ -134,8 +180,11 @@ const MSG = {
 // ═══════════════════════════════════════════════════════════════
 
 const state = {
-  /** @type {{ flag: string, yyyy: string, flagdate: string } | null} */
-  selectedBar: null,
+  /**
+   * 선택된 bar 목록. 같은 flag 내에서 여러 bar 선택 가능.
+   * @type {{ flag: string, yyyy: string, flagdate: string }[]}
+   */
+  selectedBars: [],
   /** @type {{ M: object, W: object, D: object }} */
   chartData: {},
   /** @type {object[]} */
@@ -144,12 +193,19 @@ const state = {
   rawColumns: [],
   /** @type {object[]} */
   ratioRows: [],
+  /** @type {string} — ratio 집계 기준 (state / eqp_id / eqp_model / area / sdwt_prod) */
+  ratioGroupBy: "state",
   /** @type {"raw" | "top" | "ratio"} */
   detailMode: "raw",
-  /** @type {"min" | "pct"} */
-  yMode: "min",
+  /** @type {"min" | "pct"} — 기본값 % */
+  yMode: "pct",
   copilot: { open: false },
 };
+
+/** 하위 호환: 단일 bar 참조가 필요한 코드용 */
+function _firstSelectedBar() {
+  return state.selectedBars[0] || null;
+}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -160,6 +216,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initTheme();
 
   _initTopGroupSelect();
+  _initRatioGroupSelect();
 
   fetchReportData();
 
@@ -238,6 +295,39 @@ function _initTopGroupSelect() {
 
   select.addEventListener("change", renderDetailPanel);
   if (topNEl) topNEl.addEventListener("change", renderDetailPanel);
+}
+
+/**
+ * Ratio Analysis 그룹 기준 드롭다운을 RATIO_GROUP_OPTIONS 로 초기 구성한다.
+ *
+ * 값이 바뀌면:
+ *   - state.ratioGroupBy 갱신
+ *   - 이미 선택된 bar 가 있으면 fetchClickDetail() 로 재조회
+ *     (서버가 새로운 group_by 기준으로 ratio 를 다시 집계)
+ */
+function _initRatioGroupSelect() {
+  const select = document.getElementById("ratioGroupSelect");
+  if (!select) return;  // 템플릿에 아직 없을 수도 있음
+
+  select.innerHTML = "";
+  RATIO_GROUP_OPTIONS.forEach((opt) => {
+    const el       = document.createElement("option");
+    el.value       = opt.value;
+    el.textContent = opt.label;
+    select.appendChild(el);
+  });
+  select.value = state.ratioGroupBy || "state";
+
+  select.addEventListener("change", () => {
+    state.ratioGroupBy = select.value || "state";
+    // 이미 bar 가 선택되어 있으면 서버에 재요청
+    if ((state.selectedBars || []).length) {
+      fetchClickDetail();
+    } else {
+      // 아직 선택 전이면 헤더만이라도 다시 그려둠
+      renderRatioPanel();
+    }
+  });
 }
 
 
@@ -481,7 +571,14 @@ function setChartLoading(isLoading) {
 // 7. Bar 클릭 핸들러
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Bar 클릭 핸들러 — 같은 flag 내에서 멀티 선택 지원
+ *   - 이미 선택된 bar 를 다시 클릭 → 선택 해제 (제거)
+ *   - 다른 flag 의 bar 클릭 → 기존 선택 초기화 후 새로 선택
+ *   - 같은 flag 의 새로운 bar 클릭 → 기존 선택에 추가
+ */
 function onBarClick(flag, eventData) {
+  console.log("[onBarClick] flag=", flag, "pts=", eventData?.points?.length);
   if (!eventData?.points?.length) return;
 
   const point    = eventData.points[0];
@@ -489,7 +586,26 @@ function onBarClick(flag, eventData) {
   const yyyy     = state.chartData?.[flag]?.yyyy_map?.[flagdate]
                  ?? String(new Date().getFullYear());
 
-  state.selectedBar = { flag, yyyy, flagdate };
+  console.log("[onBarClick] selected:", { flag, yyyy, flagdate });
+  const existing = state.selectedBars;
+  const isSame = (b) => b.flag === flag && b.yyyy === yyyy && b.flagdate === flagdate;
+
+  if (existing.length && existing[0].flag !== flag) {
+    // 다른 flag 의 bar — 기존 선택 초기화
+    state.selectedBars = [{ flag, yyyy, flagdate }];
+  } else if (existing.some(isSame)) {
+    // 이미 선택된 동일 bar — 제거 (토글)
+    state.selectedBars = existing.filter((b) => !isSame(b));
+  } else {
+    // 같은 flag 의 새로운 bar — 추가
+    state.selectedBars = [...existing, { flag, yyyy, flagdate }];
+  }
+
+  // 선택이 비었으면 초기화
+  if (state.selectedBars.length === 0) {
+    clearSelectedBar();
+    return;
+  }
 
   updateContextBar();
   updateCopilotContextHint();
@@ -497,15 +613,27 @@ function onBarClick(flag, eventData) {
 }
 
 function clearSelectedBar() {
-  state.selectedBar = null;
-  state.rawRows     = [];
-  state.rawColumns  = [];
-  state.ratioRows   = [];
+  state.selectedBars = [];
+  state.rawRows      = [];
+  state.rawColumns   = [];
+  state.ratioRows    = [];
 
   document.getElementById("contextBar").style.display = "none";
   document.getElementById("sfDetail").style.display   = "none";
 
   updateCopilotContextHint();
+}
+
+/** 특정 선택 bar 하나만 제거한다 (chip X 버튼 콜백) */
+function removeSelectedBar(index) {
+  state.selectedBars.splice(index, 1);
+  if (state.selectedBars.length === 0) {
+    clearSelectedBar();
+    return;
+  }
+  updateContextBar();
+  updateCopilotContextHint();
+  fetchClickDetail();
 }
 
 
@@ -514,17 +642,22 @@ function clearSelectedBar() {
 // ═══════════════════════════════════════════════════════════════
 
 async function fetchClickDetail() {
-  const { flag, yyyy, flagdate } = state.selectedBar || {};
+  console.log("[fetchClickDetail] selectedBars=", JSON.stringify(state.selectedBars));
+  const bars = state.selectedBars;
+  if (!bars.length) { showToast(MSG.MISSING_BAR); return; }
 
-  if (!flag || !yyyy || !flagdate) { showToast(MSG.MISSING_BAR); return; }
+  // 모든 bar 는 같은 flag/yyyy 여야 함 (onBarClick 에서 보장)
+  const flag = bars[0].flag;
+  const yyyy = bars[0].yyyy;
 
   setDetailLoading(true);
   document.getElementById("sfDetail").style.display = "block";
 
   const params = collectFilters();
-  params.append("flag",     flag);
-  params.append("yyyy",     yyyy);
-  params.append("flagdate", flagdate);
+  params.append("flag", flag);
+  params.append("yyyy", yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("ratio_group_by", state.ratioGroupBy || "state");
 
   const url = `${URLS.clickDetail}?${params.toString()}`;
 
@@ -537,6 +670,9 @@ async function fetchClickDetail() {
     state.rawRows    = json.data.rows    || [];
     state.rawColumns = json.data.columns || [];
     state.ratioRows  = json.data.ratio   || [];
+    // 서버가 실제로 사용한 group_by 를 신뢰 (front 와 불일치 시 auto 보정)
+    if (json.data.ratio_group_by) state.ratioGroupBy = json.data.ratio_group_by;
+    console.log("[fetchClickDetail] got rows=", state.rawRows.length, "cols=", state.rawColumns, "mode=", state.detailMode);
 
     // reset sort state so previous column sort doesn't carry over to new data
     delete _sortState["rawTable"];
@@ -571,9 +707,6 @@ function renderDetailPanel() {
 
   const captureBtn = document.getElementById("chartCaptureBtn");
   if (captureBtn) captureBtn.style.display = mode === "top" ? "inline-flex" : "none";
-
-  const rawExcelBtn = document.getElementById("rawExcelBtn");
-  if (rawExcelBtn) rawExcelBtn.style.display = mode === "raw" ? "inline-flex" : "none";
 
   if (mode === "raw")        renderRawTable();
   else if (mode === "top")   renderTopPanel();
@@ -791,13 +924,16 @@ async function onTopBarClick(clickedRow, groupCols) {
     .map((col) => `${col}=${clickedRow[col] || "-"}`)
     .join(" / ");
 
-  if (!state.selectedBar) {
+  const bars = state.selectedBars;
+  if (!bars.length) {
     showToast("먼저 메인 차트의 bar를 클릭하세요.");
     return;
   }
 
-  const { flag, yyyy, flagdate } = state.selectedBar;
-  const params = new URLSearchParams({ flag, yyyy, flagdate });
+  const flag = bars[0].flag;
+  const yyyy = bars[0].yyyy;
+  const params = new URLSearchParams({ flag, yyyy });
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
   eqpIds.forEach((id) => params.append("eqp_id", id));
 
   try {
@@ -915,8 +1051,12 @@ function renderRatioPanel() {
   }
   if (emptyEl) emptyEl.style.display = "none";
 
+  // 현재 그룹화 기준 (서버가 돌려준 값이 우선)
+  const groupBy    = state.ratioGroupBy || "state";
+  const groupLabel = (RATIO_GROUP_OPTIONS.find((o) => o.value === groupBy)?.label) || groupBy;
+
   const cols = [
-    { key: "state",         label: "State"       },
+    { key: groupBy,         label: groupLabel    },
     { key: "loss_time_min", label: "Loss (min)"  },
     { key: "pct_vs_eqp",   label: "vs EQP %"    },
     { key: "pct_vs_model", label: "vs Model %"  },
@@ -1011,13 +1151,29 @@ function toggleSidebar(open) {
 }
 
 function updateContextBar() {
-  const { flag, yyyy, flagdate } = state.selectedBar || {};
-  if (!flag) return;
-
   const barEl   = document.getElementById("contextBar");
-  const badgeEl = document.getElementById("contextBadge");
+  const chipsEl = document.getElementById("contextChips");
+  if (!barEl || !chipsEl) return;
 
-  badgeEl.textContent = `${flag} / ${yyyy} / ${flagdate}`;
+  const bars = state.selectedBars;
+  if (!bars.length) {
+    barEl.style.display = "none";
+    return;
+  }
+
+  chipsEl.innerHTML = "";
+  bars.forEach((b, idx) => {
+    const chip = document.createElement("span");
+    chip.className = "sf-chip";
+    chip.innerHTML = `${b.flag} / ${b.yyyy} / ${b.flagdate}` +
+      `<button class="sf-chip__close" type="button" aria-label="선택 해제">` +
+      `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">` +
+      `<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
+      `</svg></button>`;
+    chip.querySelector(".sf-chip__close")
+        .addEventListener("click", (e) => { e.stopPropagation(); removeSelectedBar(idx); });
+    chipsEl.appendChild(chip);
+  });
   barEl.style.display = "flex";
 }
 
@@ -1060,9 +1216,12 @@ function updateCopilotContextHint() {
   const el = document.getElementById("copilotContextHint");
   if (!el) return;
 
-  if (state.selectedBar) {
-    const { flag, yyyy, flagdate } = state.selectedBar;
-    el.textContent   = `📍 선택된 bar: ${flag} / ${yyyy} / ${flagdate}`;
+  const bars = state.selectedBars;
+  if (bars.length) {
+    const flag = bars[0].flag;
+    const yyyy = bars[0].yyyy;
+    const dates = bars.map((b) => b.flagdate).join(", ");
+    el.textContent   = `📍 선택된 bar: ${flag} / ${yyyy} / ${dates}`;
     el.style.display = "block";
   } else {
     el.textContent   = "";
@@ -1176,7 +1335,8 @@ async function sendAiQuestion() {
   const body = {
     question,
     page_context:    "stoploss",
-    selected_bar:    state.selectedBar || null,
+    selected_bar:    state.selectedBars[0] || null,
+    selected_bars:   state.selectedBars || [],
     sidebar_filters: collectFiltersAsDict(),
   };
 
@@ -1326,8 +1486,15 @@ function downloadRawExcel() {
     const sheetName = "RawData";
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
-    const bar      = state.selectedBar;
-    const barLabel = bar ? `${bar.flag}${bar.flagdate.replace("/", "")}` : "all";
+    const bars     = state.selectedBars || [];
+    let barLabel   = "all";
+    if (bars.length === 1) {
+      barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
+    } else if (bars.length > 1) {
+      const flag  = bars[0].flag;
+      const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
+      barLabel = `${flag}${dates}`;
+    }
     const now      = new Date();
     const ts       = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
     const fileName = `stoploss_rawdata_${barLabel}_${ts}.xlsx`;

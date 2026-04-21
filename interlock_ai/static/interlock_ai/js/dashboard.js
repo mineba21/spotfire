@@ -128,8 +128,11 @@ const MSG = {
 // ═══════════════════════════════════════════════════════════════
 
 const state = {
-  /** @type {{ flag: string, yyyy: string, flagdate: string } | null} */
-  selectedBar: null,
+  /**
+   * 선택된 bar 목록 — 같은 flag 안에서 여러 bar 멀티 선택 지원
+   * @type {{ flag: string, yyyy: string, flagdate: string }[]}
+   */
+  selectedBars: [],
   /** @type {{ M: object, W: object, D: object }} */
   chartData: {},
   /** @type {object[]} */
@@ -140,6 +143,11 @@ const state = {
   detailMode: "raw",
   copilot: { open: false },
 };
+
+/** 기존 코드 호환용 — 첫 번째 선택된 bar 반환 (없으면 null) */
+function _getPrimarySelectedBar() {
+  return state.selectedBars[0] || null;
+}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -487,6 +495,12 @@ function setChartLoading(isLoading) {
 // 7. Bar 클릭 핸들러
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Bar 클릭 핸들러 — 같은 flag 내에서 멀티 선택 지원
+ *   - 이미 선택된 bar 를 다시 클릭 → 선택 해제 (제거)
+ *   - 다른 flag 의 bar 클릭 → 기존 선택 초기화 후 새로 선택
+ *   - 같은 flag 의 새로운 bar 클릭 → 기존 선택에 추가
+ */
 function onBarClick(flag, eventData) {
   if (!eventData?.points?.length) return;
 
@@ -495,7 +509,24 @@ function onBarClick(flag, eventData) {
   const yyyy     = state.chartData?.[flag]?.yyyy_map?.[flagdate]
                  ?? String(new Date().getFullYear());
 
-  state.selectedBar = { flag, yyyy, flagdate };
+  const existing = state.selectedBars;
+  const isSame = (b) => b.flag === flag && b.yyyy === yyyy && b.flagdate === flagdate;
+
+  if (existing.length && existing[0].flag !== flag) {
+    // 다른 flag 의 bar — 기존 선택 초기화
+    state.selectedBars = [{ flag, yyyy, flagdate }];
+  } else if (existing.some(isSame)) {
+    // 이미 선택된 동일 bar — 제거 (토글)
+    state.selectedBars = existing.filter((b) => !isSame(b));
+  } else {
+    // 같은 flag 의 새로운 bar — 추가
+    state.selectedBars = [...existing, { flag, yyyy, flagdate }];
+  }
+
+  if (state.selectedBars.length === 0) {
+    clearSelectedBar();
+    return;
+  }
 
   updateContextBar();
   updateCopilotContextHint();
@@ -503,14 +534,26 @@ function onBarClick(flag, eventData) {
 }
 
 function clearSelectedBar() {
-  state.selectedBar = null;
-  state.rawRows     = [];
-  state.rawColumns  = [];
+  state.selectedBars = [];
+  state.rawRows      = [];
+  state.rawColumns   = [];
 
   document.getElementById("contextBar").style.display = "none";
   document.getElementById("sfDetail").style.display   = "none";
 
   updateCopilotContextHint();
+}
+
+/** 특정 선택 bar 하나만 제거한다 (chip X 버튼 콜백) */
+function removeSelectedBar(index) {
+  state.selectedBars.splice(index, 1);
+  if (state.selectedBars.length === 0) {
+    clearSelectedBar();
+    return;
+  }
+  updateContextBar();
+  updateCopilotContextHint();
+  fetchClickDetail();
 }
 
 
@@ -519,17 +562,20 @@ function clearSelectedBar() {
 // ═══════════════════════════════════════════════════════════════
 
 async function fetchClickDetail() {
-  const { flag, yyyy, flagdate } = state.selectedBar || {};
+  const bars = state.selectedBars;
+  if (!bars.length) { showToast(MSG.MISSING_BAR); return; }
 
-  if (!flag || !yyyy || !flagdate) { showToast(MSG.MISSING_BAR); return; }
+  // 모든 bar 는 같은 flag/yyyy 여야 함 (onBarClick 에서 보장)
+  const flag = bars[0].flag;
+  const yyyy = bars[0].yyyy;
 
   setDetailLoading(true);
   document.getElementById("sfDetail").style.display = "block";
 
   const params = collectFilters();
-  params.append("flag",     flag);
-  params.append("yyyy",     yyyy);
-  params.append("flagdate", flagdate);
+  params.append("flag", flag);
+  params.append("yyyy", yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
 
   const url = `${URLS.clickDetail}?${params.toString()}`;
 
@@ -989,13 +1035,29 @@ function toggleSidebar(open) {
 }
 
 function updateContextBar() {
-  const { flag, yyyy, flagdate } = state.selectedBar || {};
-  if (!flag) return;
-
   const barEl   = document.getElementById("contextBar");
-  const badgeEl = document.getElementById("contextBadge");
+  const chipsEl = document.getElementById("contextChips");
+  if (!barEl || !chipsEl) return;
 
-  badgeEl.textContent = `${flag} / ${yyyy} / ${flagdate}`;
+  const bars = state.selectedBars;
+  if (!bars.length) {
+    barEl.style.display = "none";
+    return;
+  }
+
+  chipsEl.innerHTML = "";
+  bars.forEach((b, idx) => {
+    const chip = document.createElement("span");
+    chip.className = "sf-chip";
+    chip.innerHTML = `${b.flag} / ${b.yyyy} / ${b.flagdate}` +
+      `<button class="sf-chip__close" type="button" aria-label="선택 해제">` +
+      `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">` +
+      `<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>` +
+      `</svg></button>`;
+    chip.querySelector(".sf-chip__close")
+        .addEventListener("click", (e) => { e.stopPropagation(); removeSelectedBar(idx); });
+    chipsEl.appendChild(chip);
+  });
   barEl.style.display = "flex";
 }
 
@@ -1038,9 +1100,12 @@ function updateCopilotContextHint() {
   const el = document.getElementById("copilotContextHint");
   if (!el) return;
 
-  if (state.selectedBar) {
-    const { flag, yyyy, flagdate } = state.selectedBar;
-    el.textContent   = `📍 선택된 bar: ${flag} / ${yyyy} / ${flagdate}`;
+  const bars = state.selectedBars;
+  if (bars.length) {
+    const flag  = bars[0].flag;
+    const yyyy  = bars[0].yyyy;
+    const dates = bars.map((b) => b.flagdate).join(", ");
+    el.textContent   = `📍 선택된 bar: ${flag} / ${yyyy} / ${dates}`;
     el.style.display = "block";
   } else {
     el.textContent   = "";
@@ -1157,7 +1222,8 @@ async function sendAiQuestion() {
   const body = {
     question,
     page_context:    pageContext,
-    selected_bar:    state.selectedBar || null,
+    selected_bar:    state.selectedBars[0] || null,
+    selected_bars:   state.selectedBars || [],
     sidebar_filters: collectFiltersAsDict(),
   };
 
@@ -1326,8 +1392,15 @@ function downloadRawExcel() {
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
     // 파일명: rawdata_<flag><flagdate>_YYYYMMDD_HHmmss.xlsx
-    const bar      = state.selectedBar;
-    const barLabel = bar ? `${bar.flag}${bar.flagdate.replace("/", "")}` : "all";
+    const bars     = state.selectedBars || [];
+    let barLabel   = "all";
+    if (bars.length === 1) {
+      barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
+    } else if (bars.length > 1) {
+      const flag  = bars[0].flag;
+      const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
+      barLabel = `${flag}${dates}`;
+    }
     const now      = new Date();
     const ts       = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
     const fileName = `rawdata_${barLabel}_${ts}.xlsx`;

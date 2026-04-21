@@ -89,17 +89,18 @@ def api_report_data(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_click_detail(request):
-    flag     = request.GET.get("flag",     "").strip().upper()
-    yyyy     = request.GET.get("yyyy",     "").strip()
-    flagdate = request.GET.get("flagdate", "").strip()
+    flag      = request.GET.get("flag", "").strip().upper()
+    yyyy      = request.GET.get("yyyy", "").strip()
+    # 멀티 bar 지원: flagdate 가 여러 개 올 수 있음 (같은 flag 내)
+    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
 
-    if not flag or not yyyy or not flagdate:
+    if not flag or not yyyy or not flagdates:
         return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
     if flag not in VALID_FLAGS:
         return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
 
     filters = parse_sidebar_filters(request.GET)
-    rows    = get_raw_detail(flag, yyyy, flagdate, filters)
+    rows    = get_raw_detail(flag, yyyy, flagdates, filters)
 
     if rows is None:
         return JsonResponse({"ok": False, "error": ERR_DATE_PARSE}, status=400)
@@ -111,7 +112,7 @@ def api_click_detail(request):
             "columns": columns,
             "rows":    rows,
             "total":   len(rows),
-            "context": {"flag": flag, "yyyy": yyyy, "flagdate": flagdate},
+            "context": {"flag": flag, "yyyy": yyyy, "flagdates": flagdates},
         }
     })
 

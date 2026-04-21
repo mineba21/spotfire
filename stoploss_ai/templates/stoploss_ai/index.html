@@ -177,8 +177,8 @@
         <div class="sf-topbar__control">
           <span class="sf-topbar__label">Y축</span>
           <div class="sf-ymode-toggle" id="ymodeToggle">
-            <button class="sf-ymode-btn sf-ymode-btn--active" data-mode="min">min</button>
-            <button class="sf-ymode-btn" data-mode="pct">%</button>
+            <button class="sf-ymode-btn" data-mode="min">min</button>
+            <button class="sf-ymode-btn sf-ymode-btn--active" data-mode="pct">%</button>
           </div>
         </div>
 
@@ -247,12 +247,13 @@
       <div class="sf-context-bar" id="contextBar" style="display:none;">
         <span class="sf-context-bar__dot"></span>
         <span class="sf-context-bar__label">선택됨</span>
-        <span class="sf-context-bar__badge" id="contextBadge"></span>
+        <!-- dashboard.js 가 chip 리스트를 동적 채움 -->
+        <div class="sf-context-bar__chips" id="contextChips"></div>
         <button class="sf-context-bar__clear" id="contextClearBtn">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
-          초기화
+          전체 초기화
         </button>
       </div>
 
@@ -371,8 +372,12 @@
           <!-- Ratio Analysis 패널 -->
           <div id="ratioPanel" style="display:none;">
             <div class="sf-ratio-header">
-              <span class="sf-rawpanel-header__title">인터락 기여도 분석</span>
-              <span class="sf-ratio-desc">각 인터락(param_type / param_name)이 전체 정지로스에서 차지하는 비율</span>
+              <span class="sf-rawpanel-header__title">기여도 분석</span>
+              <span class="sf-ratio-desc">선택된 기준별 정지로스 기여도 비율</span>
+              <span class="sf-topbar__label" style="margin-left:auto;">집계 기준</span>
+              <select id="ratioGroupSelect" class="sf-select-sm" style="min-width:150px;">
+                <!-- dashboard.js _initRatioGroupSelect() 에서 채워짐 -->
+              </select>
             </div>
             <div class="sf-table-wrapper">
               <table class="sf-table sf-ratio-table" id="ratioTable">

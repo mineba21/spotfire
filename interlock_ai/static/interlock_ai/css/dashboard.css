@@ -593,6 +593,44 @@ html[data-theme="dark"] .sf-chart-card__loading { background: rgba(15,23,42,.8);
   padding: 2px 10px;
 }
 
+/* 멀티 bar 선택 chip 리스트 */
+.sf-context-bar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.sf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sf-primary);
+  background: var(--sf-surface);
+  border: 1px solid rgba(99,102,241,.3);
+  border-radius: 14px;
+  padding: 2px 4px 2px 10px;
+}
+.sf-chip__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sf-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--sf-transition), color var(--sf-transition);
+}
+.sf-chip__close:hover {
+  background: var(--sf-danger, #ef4444);
+  color: #fff;
+}
+
 .sf-context-bar__clear {
   display: flex;
   align-items: center;
@@ -853,6 +891,34 @@ html[data-theme="dark"] .sf-excel-btn:hover {
 html[data-theme="dark"] .sf-table tbody tr:nth-child(even) td { background: rgba(255,255,255,.02); }
 .sf-table tbody tr:hover > td { background: var(--sf-primary-soft); }
 .sf-table tbody tr:last-child td { border-bottom: none; }
+
+/* Rawdata / Top Raw 테이블: 컬럼 너비 콘텐츠 기반 자동 */
+#rawTable,
+#topRawTable {
+  table-layout: auto;
+  width: 100%;
+}
+#rawTable th:first-child,
+#rawTable td:first-child,
+#topRawTable th:first-child,
+#topRawTable td:first-child {
+  min-width: 80px;
+}
+#rawTable th, #rawTable td,
+#topRawTable th, #topRawTable td {
+  white-space: nowrap;
+}
+
+/* Top Show 옆 rank table: 컬럼 auto + 값 중앙 정렬 */
+#topTable {
+  table-layout: auto;
+  width: 100%;
+}
+#topTable th,
+#topTable td {
+  text-align: center !important;
+  white-space: nowrap;
+}
 
 /* ── 정렬 가능한 헤더 ── */
 .sf-table th.sf-sortable {

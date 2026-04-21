@@ -134,18 +134,34 @@ def _parse_flagdate_d(flagdate: str, year: int) -> "datetime.date | None":
         return None
 
 
-def get_raw_detail(flag: str, yyyy: str, flagdate: str, filters: dict) -> list:
+def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
     """
-    (flag, yyyy, flagdate) + sidebar 필터 기준으로 raw data 를 조회한다.
+    (flag, yyyy, flagdates) + sidebar 필터 기준으로 raw data 를 조회한다.
 
+    - flagdates: 단일 str 또는 list[str] (멀티 bar 선택 지원)
     반환: dict list (각 dict 는 RAW_COLUMNS 에 정의된 컬럼만 포함)
     Raw 테이블은 이벤트 로그이므로 건수(행 수) 자체가 발생 횟수를 의미한다.
     """
-    start_ymd, end_ymd = get_date_range(flag, yyyy, flagdate)
-
-    if start_ymd is None:
-        logger.warning("get_date_range 반환 None | flag=%s yyyy=%s flagdate=%s", flag, yyyy, flagdate)
+    # 단일 str 하위 호환
+    if isinstance(flagdates, str):
+        flagdates = [flagdates]
+    flagdates = [fd for fd in flagdates if fd]
+    if not flagdates:
         return []
+
+    # 여러 flagdate 의 date range 를 합친다
+    starts, ends = [], []
+    for fd in flagdates:
+        s, e = get_date_range(flag, yyyy, fd)
+        if s and e:
+            starts.append(s)
+            ends.append(e)
+
+    if not starts:
+        logger.warning("get_date_range 반환 None | flag=%s yyyy=%s flagdates=%s", flag, yyyy, flagdates)
+        return []
+
+    start_ymd, end_ymd = min(starts), max(ends)
 
     q = build_filter_q(filters)
 
