@@ -113,6 +113,12 @@ function _attachSorting(thead, columns, tableId, getRows, renderBody) {
   });
 }
 
+function toNumber(val) {
+  if (val == null || val === "") return 0;
+  const n = Number(String(val).replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
 // Rawdata 테이블에서 숫자로 취급해 우측 정렬할 컬럼 목록
 const NUMERIC_COLS = new Set([
   "stoploss", "pm", "qual", "bm", "eng", "etc", "stepchg", "std_time", "rd",
@@ -131,7 +137,11 @@ const COL_LABELS = {
   plan_time:    "Plan Time",
   stoploss:     "Stoploss",
   loss_time_min:"Loss (min)",
-  down_comment: "Comment",
+  act_time:     "Act Time",
+  line:         "Line",
+  param_type:   "Param Type",
+  param_name:   "Param Name",
+  lot_id:       "Lot ID",
   start_time:   "Start",
   end_time:     "End",
   yyyymmdd:     "Date",
@@ -191,6 +201,10 @@ const state = {
   rawRows: [],
   /** @type {string[]} */
   rawColumns: [],
+  /** @type {object[]} — Top Show 집계용 report_stoploss rows */
+  reportRows: [],
+  /** @type {string[]} */
+  reportColumns: [],
   /** @type {object[]} */
   ratioRows: [],
   /** @type {string} — ratio 집계 기준 (state / eqp_id / eqp_model / area / sdwt_prod) */
@@ -231,7 +245,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   on("applyFilterBtn",    "click",  fetchReportData);
   on("resetFilterBtn",    "click",  resetFilters);
-  on("yFieldSelect",      "change", fetchReportData);
+  on("yFieldSelect",      "change", () => {
+    fetchReportData();
+    if (state.reportRows.length && state.detailMode === "top") renderTopPanel();
+  });
 
   // Y Mode 토글 버튼
   document.querySelectorAll(".sf-ymode-btn").forEach((btn) => {
@@ -390,7 +407,7 @@ function setYMode(mode) {
   });
   fetchReportData();
   // Top Show 가 열려있으면 y_mode 변경 즉시 재집계
-  if (state.rawRows.length && state.detailMode === "top") renderTopPanel();
+  if (state.reportRows.length && state.detailMode === "top") renderTopPanel();
 }
 
 /**
@@ -540,12 +557,45 @@ function renderBarChart(flag, data) {
   const fontColor = isDark ? "#94a3b8" : "#64748b";
   const hoverBg   = isDark ? "#1e293b" : "#0f172a";
 
+  const allY = series.flatMap((s) =>
+    (s.y || []).map((v) => Number(v)).filter((v) => Number.isFinite(v))
+  );
+  const maxY = allY.length ? Math.max(...allY) : 0;
+  const yAxisMax = maxY > 0 ? maxY * 1.22 : 1;
+
+  const labelAnnotations = [];
+  series.forEach((s) => {
+    (s.y || []).forEach((v, i) => {
+      const y = Number(v);
+      if (!Number.isFinite(y) || y === 0) return;
+
+      labelAnnotations.push({
+        x: flagdates[i],
+        y,
+        xref: "x",
+        yref: "y",
+        text: yMode === "pct"
+          ? `${y.toFixed(2)}%`
+          : y.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+        showarrow: false,
+        yshift: 10,
+        font: { size: 10, color: fontColor },
+      });
+    });
+  });
+
   const layout = {
     barmode: "group",
-    margin:  { t: 8, b: 56, l: 50, r: 8 },
+    margin:  { t: 34, b: 56, l: 50, r: 8 },
     xaxis:   { tickangle: -30, automargin: true, fixedrange: true },
-    yaxis:   { title: { text: yAxisLabel, font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis:   {
+      title: { text: yAxisLabel, font: { size: 11 } },
+      automargin: true,
+      fixedrange: true,
+      range: [0, yAxisMax],
+    },
     legend:  { orientation: "h", y: -0.28, font: { size: 10 } },
+    annotations: labelAnnotations,
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
     font:          { family: "Inter, sans-serif", size: 11, color: fontColor },
@@ -616,6 +666,8 @@ function clearSelectedBar() {
   state.selectedBars = [];
   state.rawRows      = [];
   state.rawColumns   = [];
+  state.reportRows   = [];
+  state.reportColumns = [];
   state.ratioRows    = [];
 
   document.getElementById("contextBar").style.display = "none";
@@ -667,12 +719,19 @@ async function fetchClickDetail() {
 
     if (!json.ok) { showToast(MSG.API_ERROR(json.error)); return; }
 
-    state.rawRows    = json.data.rows    || [];
-    state.rawColumns = json.data.columns || [];
-    state.ratioRows  = json.data.ratio   || [];
+    state.rawRows       = json.data.rows           || [];
+    state.rawColumns    = json.data.columns        || [];
+    state.reportRows    = json.data.report_rows    || [];
+    state.reportColumns = json.data.report_columns || [];
+    state.ratioRows     = json.data.ratio          || [];
     // 서버가 실제로 사용한 group_by 를 신뢰 (front 와 불일치 시 auto 보정)
     if (json.data.ratio_group_by) state.ratioGroupBy = json.data.ratio_group_by;
-    console.log("[fetchClickDetail] got rows=", state.rawRows.length, "cols=", state.rawColumns, "mode=", state.detailMode);
+    console.log(
+      "[fetchClickDetail] got rows=", state.rawRows.length,
+      "reportRows=", state.reportRows.length,
+      "cols=", state.rawColumns,
+      "mode=", state.detailMode,
+    );
 
     // reset sort state so previous column sort doesn't carry over to new data
     delete _sortState["rawTable"];
@@ -715,7 +774,7 @@ function renderDetailPanel() {
 
 function onDetailModeChange(e) {
   state.detailMode = e.target.value;
-  if (state.rawRows.length || state.ratioRows.length) renderDetailPanel();
+  if (state.rawRows.length || state.reportRows.length || state.ratioRows.length) renderDetailPanel();
 }
 
 // ── Rawdata Show ──────────────────────────────────────────────
@@ -790,12 +849,16 @@ function renderRawTable() {
 // ── Top Show (report_stoploss 기반 그룹 집계) ────────────────
 
 /**
- * state.rawRows(report_stoploss) 를 그룹별로 집계해 Top-N 차트 + 테이블을 렌더링한다.
+ * state.reportRows(report_stoploss) 를 그룹별로 집계해 Top-N 차트 + 테이블을 렌더링한다.
  * - y_field : 현재 선택된 손실 컬럼 (stoploss/pm/qual/bm/eng/etc/stepchg/std_time/rd)
  * - y_mode  : "min" → 절대값(분) / "pct" → plan_time 대비 %
  */
 function renderTopPanel() {
-  if (!state.rawRows.length) return;
+  const reportRows = Array.isArray(state.reportRows) ? state.reportRows : [];
+  if (!reportRows.length) {
+    showToast("Top Show 집계용 report 데이터가 없습니다.");
+    return;
+  }
 
   const groupColStr = document.getElementById("topGroupSelect").value || "area";
   const groupCols   = groupColStr.split(",").map((c) => c.trim()).filter(Boolean);
@@ -806,7 +869,7 @@ function renderTopPanel() {
   // ── 그룹별 집계 ───────────────────────────────────────────
   const aggMap = new Map();
 
-  state.rawRows.forEach((row) => {
+  reportRows.forEach((row) => {
     const keyParts = groupCols.map((col) => (row[col] != null ? String(row[col]) : ""));
     const key      = keyParts.join("|");
 
@@ -816,8 +879,8 @@ function renderTopPanel() {
       aggMap.set(key, entry);
     }
     const entry = aggMap.get(key);
-    entry.y_sum    += (row[yField] || 0);
-    entry.plan_sum += (row.plan_time || 0);
+    entry.y_sum    += toNumber(row[yField]);
+    entry.plan_sum += toNumber(row.plan_time);
     entry.cnt      += 1;
   });
 
@@ -883,7 +946,8 @@ function _renderTopTable() {
   thead.innerHTML = "";
   tbody.innerHTML = "";
 
-  const rows = state.rawRows;
+  const rows = (Array.isArray(state.reportRows) ? state.reportRows : [])
+    .filter((row) => toNumber(row.stoploss) > 0);
   if (!rows.length) return;
 
   const cols = ["eqp_id", "stoploss", "plan_time"];
@@ -904,8 +968,13 @@ function _renderTopTable() {
     cols.forEach((col) => {
       const td  = document.createElement("td");
       const val = row[col];
-      td.textContent = val != null ? val : "";
-      if (typeof val === "number") td.style.textAlign = "right";
+      if (col === "stoploss" || col === "plan_time") {
+        const num = toNumber(val);
+        td.textContent = num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        td.style.textAlign = "right";
+      } else {
+        td.textContent = val != null ? val : "";
+      }
       tr.appendChild(td);
     });
     fragment.appendChild(tr);
@@ -915,7 +984,7 @@ function _renderTopTable() {
 
 async function onTopBarClick(clickedRow, groupCols) {
   // 클릭된 그룹에 속하는 eqp_id 목록 수집
-  const matchedRows = state.rawRows.filter((row) =>
+  const matchedRows = (Array.isArray(state.reportRows) ? state.reportRows : []).filter((row) =>
     groupCols.every((col) => String(row[col] ?? "") === String(clickedRow[col] ?? ""))
   );
   const eqpIds = [...new Set(matchedRows.map((r) => r.eqp_id).filter(Boolean))];
@@ -1135,7 +1204,7 @@ function toggleTheme() {
   VALID_FLAGS.forEach((flag) => {
     if (state.chartData[flag]) renderBarChart(flag, state.chartData[flag]);
   });
-  if (state.rawRows.length && state.detailMode === "top") renderTopPanel();
+  if (state.reportRows.length && state.detailMode === "top") renderTopPanel();
 }
 
 function _applyTheme(theme) {

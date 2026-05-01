@@ -7,11 +7,14 @@ stoploss_ai/services/ratio_service.py
   1. group_by 컬럼(기본: state) 을 grouping key 로 사용한다.
      → "어떤 원인(state/eqp_model/area 등)이 몇 분 정지로스를 유발했나" 분석.
 
-  2. loss_time_min 은 start_time / end_time 차이(분)로 Python에서 계산한다.
+  2. loss_time_min 은 raw event duration 합이 아니다.
+     tpm_eqp_loss 의 raw duration 을 EQP별 report_stoploss.stoploss 합에 비례 배분한
+     allocated loss minutes 이다.
 
-  3. report_stoploss.stoploss 를 분모로 사용:
-     - 위치 필터를 적용하지 않고 flag/flagdate 기준으로 인덱싱.
-     - eqp_id / eqp_model / sdwt_prod / area / 전체 레벨별 stoploss 합을 사용.
+  3. 분자와 분모는 같은 report_stoploss scope 를 기준으로 맞춘다.
+     - yyyy / flag / flagdate + sidebar filter 전체를 report_stoploss 에 먼저 적용한다.
+     - 이 scope 에 존재하는 EQP 의 tpm_eqp_loss event 만 분석 대상에 포함한다.
+     - EQP별 raw duration 합을 EQP별 report_stoploss.stoploss 합으로 정규화한다.
 
   4. pct_vs_eqp  : group 이 발생한 설비들의 stoploss 합 대비 %
      pct_vs_model: 해당 기종 stoploss 합 대비 %
@@ -42,9 +45,10 @@ import logging
 from collections import defaultdict
 from typing import Optional
 
-from django.db.models import Q, Sum
+from django.db.models import Q
 
 from stoploss_ai.models import TpmEqpLoss, StoplossReport
+from stoploss_ai.services.filter_service import build_q
 from interlock_ai.services.detail_service import get_date_range
 
 logger = logging.getLogger(__name__)
@@ -127,43 +131,73 @@ def get_ratio_analysis(
     if not start_ymd:
         return []
 
-    # ── Step 1: tpm_eqp_loss 조회 ────────────────────────────────
-    q_loss = Q(yyyymmdd__gte=start_ymd, yyyymmdd__lte=end_ymd)
+    # ── Step 1: report_stoploss scope 생성 ───────────────────────
+    q_report = Q(yyyy=yyyy, flag=flag, flagdate__in=flagdates) & build_q(filters)
+    report_rows = list(
+        StoplossReport.objects
+        .filter(q_report)
+        .values("eqp_id", "eqp_model", "sdwt_prod", "area", "stoploss")
+    )
 
-    eqp_ids_filter = filters.get("eqp_id", [])
-    if eqp_ids_filter:
-        q_loss &= Q(eqp_id__in=eqp_ids_filter)
+    if not report_rows:
+        return []
 
-    loss_qs = (
+    idx_eqp = defaultdict(float)
+    idx_model = defaultdict(float)
+    idx_sdwt = defaultdict(float)
+    idx_area = defaultdict(float)
+    eqp_meta = {}
+
+    for row in report_rows:
+        eqp_id = row["eqp_id"] or ""
+        eqp_model = row["eqp_model"] or ""
+        sdwt_prod = row["sdwt_prod"] or ""
+        area = row["area"] or ""
+        stoploss = row["stoploss"] or 0.0
+
+        idx_eqp[eqp_id] += stoploss
+        idx_model[eqp_model] += stoploss
+        idx_sdwt[sdwt_prod] += stoploss
+        idx_area[area] += stoploss
+
+        if eqp_id and eqp_id not in eqp_meta:
+            eqp_meta[eqp_id] = {
+                "eqp_model": eqp_model,
+                "sdwt_prod": sdwt_prod,
+                "area": area,
+            }
+
+    total_stoploss = sum(idx_eqp.values())
+    report_scope_eqp_ids = set(idx_eqp.keys())
+    if not report_scope_eqp_ids:
+        return []
+
+    # ── Step 2: report scope 에 포함된 EQP 의 raw event 조회 ─────
+    q_loss = (
+        Q(yyyymmdd__gte=start_ymd, yyyymmdd__lte=end_ymd)
+        & Q(eqp_id__in=report_scope_eqp_ids)
+    )
+
+    loss_rows = list(
         TpmEqpLoss.objects
         .filter(q_loss)
         .values("eqp_id", "start_time", "end_time", "state")
         .order_by("yyyymmdd", "start_time")
     )
 
-    # ── Step 2: report_stoploss 에서 eqp 메타 맵 구축 ──────────
-    # eqp_id → (area, eqp_model, sdwt_prod)
-    q_base = Q(yyyy=yyyy, flag=flag, flagdate__in=flagdates)
-    meta_qs = (
-        StoplossReport.objects
-        .filter(q_base)
-        .values("eqp_id", "area", "eqp_model", "sdwt_prod")
-        .distinct()
-    )
-    eqp_meta: dict = {}
-    for row in meta_qs:
-        eqp_meta[row["eqp_id"]] = {
-            "area":      row["area"]      or "",
-            "eqp_model": row["eqp_model"] or "",
-            "sdwt_prod": row["sdwt_prod"] or "",
-        }
+    # ── Step 3: EQP별 raw duration 총합 계산 ─────────────────────
+    raw_total_by_eqp = defaultdict(float)
+    prepared_events = []
 
-    # sidebar 위치 필터 — loss 결과 필터링용
-    area_filter  = set(filters.get("area",      []))
-    model_filter = set(filters.get("eqp_model", []))
-    sdwt_filter  = set(filters.get("sdwt_prod", []))
+    for row in loss_rows:
+        eqp_id = row["eqp_id"] or ""
+        raw_loss = _calc_loss_min(row["start_time"], row["end_time"])
+        if raw_loss <= 0:
+            continue
+        prepared_events.append((row, raw_loss))
+        raw_total_by_eqp[eqp_id] += raw_loss
 
-    # ── Step 3: group_by 기준 집계 ───────────────────────────────
+    # ── Step 4: group_by 기준 allocated loss 집계 ────────────────
     # group_key → { loss_time, eqp_ids, eqp_models, sdwt_prods, areas }
     combo: dict = defaultdict(lambda: {
         "loss_time":  0.0,
@@ -173,22 +207,23 @@ def get_ratio_analysis(
         "areas":      set(),
     })
 
-    for row in loss_qs:
-        eqp_id    = row["eqp_id"] or ""
-        meta      = eqp_meta.get(eqp_id, {"area": "", "eqp_model": "", "sdwt_prod": ""})
-        area      = meta["area"]
+    for row, raw_loss in prepared_events:
+        eqp_id = row["eqp_id"] or ""
+        meta = eqp_meta.get(eqp_id)
+        if not meta:
+            continue
+
+        raw_total = raw_total_by_eqp.get(eqp_id, 0.0)
+        eqp_stoploss = idx_eqp.get(eqp_id, 0.0)
+        if raw_total <= 0 or eqp_stoploss <= 0:
+            allocated_loss = 0.0
+        else:
+            allocated_loss = raw_loss / raw_total * eqp_stoploss
+
         eqp_model = meta["eqp_model"]
         sdwt_prod = meta["sdwt_prod"]
+        area = meta["area"]
 
-        # sidebar 위치 필터
-        if area_filter  and area      not in area_filter:
-            continue
-        if model_filter and eqp_model not in model_filter:
-            continue
-        if sdwt_filter  and sdwt_prod not in sdwt_filter:
-            continue
-
-        # group_by 컬럼 결정
         group_key_map = {
             "state":     row["state"]   or "(unknown)",
             "eqp_id":    eqp_id         or "(unknown)",
@@ -197,9 +232,8 @@ def get_ratio_analysis(
             "sdwt_prod": sdwt_prod      or "(unknown)",
         }
         group_key = group_key_map[group_by]
-        lt        = _calc_loss_min(row["start_time"], row["end_time"])
 
-        combo[group_key]["loss_time"]    += lt
+        combo[group_key]["loss_time"]    += allocated_loss
         combo[group_key]["eqp_ids"].add(eqp_id)
         combo[group_key]["eqp_models"].add(eqp_model)
         combo[group_key]["sdwt_prods"].add(sdwt_prod)
@@ -208,28 +242,12 @@ def get_ratio_analysis(
     if not combo:
         return []
 
-    # ── Step 4: report_stoploss 레벨별 stoploss 인덱스 구축 ─────
-    def _index_by(field: str) -> dict:
-        rows = (
-            StoplossReport.objects
-            .filter(q_base)
-            .values(field)
-            .annotate(s=Sum("stoploss"))
-        )
-        return {r[field]: (r["s"] or 0.0) for r in rows}
-
-    idx_eqp   = _index_by("eqp_id")
-    idx_model = _index_by("eqp_model")
-    idx_sdwt  = _index_by("sdwt_prod")
-    idx_area  = _index_by("area")
-    total_stoploss = sum(idx_eqp.values())
-
     logger.debug(
         "[Ratio] period=%s/%s/%s group_by=%s | total_stoploss=%.2f | rows=%d",
         flag, yyyy, flagdates, group_by, total_stoploss, len(combo),
     )
 
-    # ── Step 5: 각 그룹별 % 계산 ────────────────────────────────
+    # ── Step 5: 같은 report scope 분모로 각 그룹별 % 계산 ────────
     def _sum_denom(idx: dict, keys: set) -> float:
         return sum(idx.get(k, 0.0) for k in keys)
 
@@ -251,11 +269,11 @@ def get_ratio_analysis(
             # group_by 키로 실제 컬럼명 반환 (프론트에서 동일 키 사용)
             group_by:        group_name,
             "loss_time_min": lt,
-            "pct_vs_eqp":    _pct(lt, denom_eqp),
-            "pct_vs_model":  _pct(lt, denom_model),
-            "pct_vs_sdwt":   _pct(lt, denom_sdwt),
-            "pct_vs_area":   _pct(lt, denom_area),
-            "pct_vs_total":  _pct(lt, total_stoploss),
+            "pct_vs_eqp":    _pct(data["loss_time"], denom_eqp),
+            "pct_vs_model":  _pct(data["loss_time"], denom_model),
+            "pct_vs_sdwt":   _pct(data["loss_time"], denom_sdwt),
+            "pct_vs_area":   _pct(data["loss_time"], denom_area),
+            "pct_vs_total":  _pct(data["loss_time"], total_stoploss),
         })
 
     result.sort(key=lambda r: r["loss_time_min"], reverse=True)

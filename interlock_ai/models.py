@@ -26,6 +26,17 @@ TABLE_RAW    = os.environ.get("TABLE_RAW",    "interlock_raw")
 # TABLE_MAINTENANCE = os.environ.get("TABLE_MAINTENANCE", "maintenance_record")
 
 
+class LinePrefixCharField(models.CharField):
+    """
+    DB에서 line 값을 읽어올 때 앞 2자리만 앱에 노출한다.
+    예) "AB1234" -> "AB", "CD_LINE_01" -> "CD"
+    """
+    def from_db_value(self, value, expression, connection):
+        if value is None:
+            return value
+        return str(value)[:2]
+
+
 # ─────────────────────────────────────────────────────────────────
 # Report 집계 테이블
 # ─────────────────────────────────────────────────────────────────
@@ -35,7 +46,7 @@ class SpotfireReport(models.Model):
     yyyy       = models.CharField(max_length=4)
     flag       = models.CharField(max_length=1)
     flagdate   = models.CharField(max_length=20)
-    line       = models.CharField(max_length=50)
+    line       = LinePrefixCharField(max_length=50)
     sdwt_prod  = models.CharField(max_length=50, blank=True)
     eqp_id     = models.CharField(max_length=50, blank=True)
     eqp_model  = models.CharField(max_length=50, blank=True)
@@ -75,7 +86,7 @@ class SpotfireRaw(models.Model):
 
     yyyymmdd   = models.CharField(max_length=10)     # "2026-01-01" 또는 "20260101"
     act_time   = models.CharField(max_length=30, blank=True)  # 발생 시각 문자열
-    line       = models.CharField(max_length=50)
+    line       = LinePrefixCharField(max_length=50)
     sdwt_prod  = models.CharField(max_length=50, blank=True)
     eqp_id     = models.CharField(max_length=50, blank=True)
     unit_id    = models.CharField(max_length=50, blank=True)

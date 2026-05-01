@@ -77,6 +77,16 @@ def build_filter_q(filters: dict) -> Q:
 
     for field, values in filters.items():
         if values:  # 값이 있을 때만 필터 추가
+            if field == "line":
+                line_q = Q()
+                for v in values:
+                    prefix = str(v)[:2]
+                    if prefix:
+                        line_q |= Q(line__startswith=prefix)
+                if line_q:
+                    q &= line_q
+                continue
+
             # field__in: SQL 의 WHERE field IN (v1, v2, ...) 에 해당
             q &= Q(**{f"{field}__in": values})
 

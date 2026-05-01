@@ -52,24 +52,26 @@ def index(request):
 
 
 def _get_distinct(field: str) -> list:
-    return list(
+    values = (
         SpotfireReport.objects
         .exclude(**{field: ""})
         .values_list(field, flat=True)
         .distinct()
         .order_by(field)
     )
+    return sorted({v for v in values if v})
 
 
 def _get_distinct_raw(field: str) -> list:
     """SpotfireRaw 에서 distinct 값 목록을 반환한다 (param_name 등 Raw 전용 필드용)."""
-    return list(
+    values = (
         SpotfireRaw.objects
         .exclude(**{field: ""})
         .values_list(field, flat=True)
         .distinct()
         .order_by(field)
     )
+    return sorted({v for v in values if v})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -147,7 +149,7 @@ def api_filter_options(request):
     q_raw = build_filter_q(filters)
 
     def _filtered_distinct(field: str) -> list:
-        return list(
+        values = (
             SpotfireReport.objects
             .filter(q_report)
             .exclude(**{field: ""})
@@ -155,9 +157,10 @@ def api_filter_options(request):
             .distinct()
             .order_by(field)
         )
+        return sorted({v for v in values if v})
 
     def _filtered_distinct_raw(field: str) -> list:
-        return list(
+        values = (
             SpotfireRaw.objects
             .filter(q_raw)
             .exclude(**{field: ""})
@@ -165,6 +168,7 @@ def api_filter_options(request):
             .distinct()
             .order_by(field)
         )
+        return sorted({v for v in values if v})
 
     return JsonResponse({"ok": True, "data": {
         "lines":        _filtered_distinct("line"),
