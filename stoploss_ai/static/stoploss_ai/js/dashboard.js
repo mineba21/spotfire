@@ -1139,6 +1139,9 @@ function renderRatioPanel() {
   cols.forEach((col) => {
     const th = document.createElement("th");
     th.textContent = col.label;
+    if (col.key === "loss_time_min" || col.key.startsWith("pct_")) {
+      th.style.textAlign = "right";
+    }
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
