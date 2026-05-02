@@ -1409,6 +1409,11 @@ html[data-theme="dark"] .sf-table tbody tr:nth-child(even) td { background: rgba
   min-height: 0;
 }
 
+.sf-ratio-table th:not(:first-child),
+.sf-ratio-table td:not(:first-child) {
+  text-align: right;
+}
+
 .sf-ratio-table td.pct-high {
   color: var(--sf-danger, #ef4444);
   font-weight: 600;
