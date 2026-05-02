@@ -4,7 +4,7 @@ stoploss_ai/services/ai_service.py
 LLM 공유: interlock_ai.services.llm_interface.get_llm_client() 재사용
 테이블: eqp_loss_tpm (상세 loss 이벤트)
 """
-from stoploss_ai.models import TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT
+from stoploss_ai.models import TABLE_EQP_LOSS_TPM, TABLE_STOPLOSS_REPORT
 
 PAGE_CONTEXT_DEFAULTS = {
     "stoploss": {},
@@ -35,14 +35,14 @@ def ask_ai(question: str, page_context: str, selected_bar, sidebar_filters: dict
         "filter_options":  filter_options  or {},
         # stoploss 전용 스키마 힌트
         "schema_hint": f"""
-테이블: {TABLE_EQP_LOSS} (설비 loss 이벤트 로그)
+테이블: {TABLE_EQP_LOSS_TPM} (설비 loss 이벤트 로그)
 컬럼: yyyymmdd, act_time, line, sdwt_prod, eqp_id, unit_id, eqp_model, param_type, param_name, loss_time(분), lot_id
 - param_type: MCC(모터 컨트롤), ERD(긴급 정지), SPC(통계적 공정 관리) 등
 - loss_time: 설비 정지 시간(분)
 - sum(loss_time)으로 정지로스 시간 집계
 
 테이블: {TABLE_STOPLOSS_REPORT} (레포트 집계 테이블)
-컬럼: yyyy, flag, flagdate, line, sdwt_prod, eqp_id, eqp_model, plan_time, stoploss, pm, qual, bm, rank
+컬럼: yyyy, flag, flagdate, area, sdwt_prod, eqp_id, eqp_model, prc_group, plan_time, stoploss, pm, qual, bm, rank
 - plan_time: 계획 가동 시간(분)
 - stoploss: 총 정지로스(분), pm+qual+bm 등의 합
 - 정지율 = loss컬럼 / plan_time * 100
@@ -65,8 +65,8 @@ def ask_ai(question: str, page_context: str, selected_bar, sidebar_filters: dict
             break
 
         # stoploss 테이블 강제 적용
-        if raw_qj.get("table") not in (TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT):
-            raw_qj["table"] = TABLE_EQP_LOSS
+        if raw_qj.get("table") not in (TABLE_EQP_LOSS_TPM, TABLE_STOPLOSS_REPORT):
+            raw_qj["table"] = TABLE_EQP_LOSS_TPM
 
         is_valid, err_msg = validate_stoploss_query_json(raw_qj)
         if is_valid:

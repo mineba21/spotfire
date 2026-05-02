@@ -66,9 +66,14 @@ def execute_query(query_json: dict) -> list:
         qs = _apply_aggregations(qs, group_by, aggregations)
 
     qs = _apply_order_by(qs, order_by)
-    qs = qs[:limit]
 
-    return _serialize(list(qs))
+    if "line" in group_by:
+        rows = _serialize(list(qs[:HARD_LIMIT]))
+        rows = _coalesce_line_prefix_rows(rows, group_by, aggregations)
+        rows = _sort_serialized(rows, order_by)
+        return rows[:limit]
+
+    return _serialize(list(qs[:limit]))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -158,6 +163,18 @@ def _apply_filters(qs, filters: dict):
                 q &= Q(yyyymmdd__gte=_to_db_ymd(start)) & Q(yyyymmdd__lte=_to_db_ymd(end))
             continue
 
+        # ── line prefix 필터 ─────────────────────────────────
+        if field == "line":
+            values = value if isinstance(value, list) else [value]
+            line_q = Q()
+            for v in values:
+                prefix = str(v)[:2]
+                if prefix:
+                    line_q |= Q(line__startswith=prefix)
+            if line_q:
+                q &= line_q
+            continue
+
         # ── 리스트 필터 → IN ──────────────────────────────────
         if isinstance(value, list):
             if value:
@@ -227,3 +244,92 @@ def _serialize(rows: list) -> list:
         result.append(serialized)
 
     return result
+
+
+def _coalesce_line_prefix_rows(rows: list, group_by: list, aggregations: list) -> list:
+    """
+    DB GROUP BY 는 원본 line 전체 문자열 기준으로 동작한다.
+    화면/AI 응답 기준은 앞 2자리 prefix 이므로 Python 단계에서 한 번 더 합친다.
+    """
+    if "line" not in group_by:
+        return rows
+
+    agg_funcs = {agg.get("alias"): agg.get("func") for agg in aggregations}
+    grouped = {}
+
+    for row in rows:
+        normalized = dict(row)
+        if normalized.get("line") is not None:
+            normalized["line"] = str(normalized["line"])[:2]
+
+        key = tuple(normalized.get(field) for field in group_by)
+        if key not in grouped:
+            base = {field: normalized.get(field) for field in group_by}
+            for alias, func in agg_funcs.items():
+                val = normalized.get(alias)
+                if func in ("count", "sum"):
+                    base[alias] = _numeric(val)
+                elif func == "avg":
+                    base[alias] = _numeric(val)
+                    base[f"__{alias}_count"] = 1 if val is not None else 0
+                elif func in ("max", "min"):
+                    base[alias] = val
+            grouped[key] = base
+            continue
+
+        base = grouped[key]
+        for alias, func in agg_funcs.items():
+            val = normalized.get(alias)
+            if func in ("count", "sum"):
+                base[alias] = _numeric(base.get(alias)) + _numeric(val)
+            elif func == "avg" and val is not None:
+                base[alias] = _numeric(base.get(alias)) + _numeric(val)
+                base[f"__{alias}_count"] = base.get(f"__{alias}_count", 0) + 1
+            elif func == "max" and val is not None:
+                current = base.get(alias)
+                base[alias] = val if current is None or val > current else current
+            elif func == "min" and val is not None:
+                current = base.get(alias)
+                base[alias] = val if current is None or val < current else current
+
+    result = []
+    for row in grouped.values():
+        for alias, func in agg_funcs.items():
+            if func == "count" and alias in row:
+                row[alias] = int(row[alias])
+            elif func == "avg":
+                count_key = f"__{alias}_count"
+                count = row.pop(count_key, 0)
+                row[alias] = round(row[alias] / count, 4) if count else None
+        result.append(row)
+
+    return result
+
+
+def _numeric(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sort_serialized(rows: list, order_by: list) -> list:
+    if not order_by:
+        return rows
+
+    def sort_value(row, field):
+        val = row.get(field)
+        if val is None:
+            return (1, "")
+        if isinstance(val, (int, float)):
+            return (0, val)
+        return (0, str(val))
+
+    sorted_rows = list(rows)
+    for item in reversed(order_by):
+        field = item.get("field", "")
+        if not field:
+            continue
+        reverse = item.get("direction", "asc") == "desc"
+        sorted_rows.sort(key=lambda row, f=field: sort_value(row, f), reverse=reverse)
+    return sorted_rows

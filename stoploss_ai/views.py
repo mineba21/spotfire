@@ -17,8 +17,8 @@ from stoploss_ai.models import StoplossReport, LOSS_COLUMNS
 from stoploss_ai.services.filter_service import parse_filters, build_q
 from stoploss_ai.services.chart_service   import get_chart_data, parse_rank_limits
 from stoploss_ai.services.detail_service  import (
-    get_report_detail, get_eqp_loss_detail,
-    RAW_COLUMNS, EQP_LOSS_COLUMNS,
+    get_report_detail, get_loss_event_detail, get_eqp_loss_detail,
+    REPORT_COLUMNS, EQP_LOSS_COLUMNS,
 )
 from stoploss_ai.services.ratio_service import get_ratio_analysis
 from stoploss_ai.services.ai_service      import ask_ai, VALID_PAGE_CONTEXTS
@@ -104,24 +104,27 @@ def api_click_detail(request):
         )
 
     filters = parse_filters(request.GET)
-    rows    = get_report_detail(flag, yyyy, flagdates, filters)
-    ratio   = get_ratio_analysis(flag, yyyy, flagdates, filters, group_by)
+    rows        = get_loss_event_detail(flag, yyyy, flagdates, filters)
+    report_rows = get_report_detail(flag, yyyy, flagdates, filters)
+    ratio       = get_ratio_analysis(flag, yyyy, flagdates, filters, group_by)
 
     return JsonResponse({
         "ok": True,
         "data": {
             "rows":            rows,
+            "columns":         EQP_LOSS_COLUMNS,
+            "total":           len(rows),
+            "report_rows":     report_rows,
+            "report_columns":  REPORT_COLUMNS,
             "ratio":           ratio,
             "ratio_group_by":  group_by,
-            "columns":         RAW_COLUMNS,
-            "total":           len(rows),
         },
     })
 
 
 @require_GET
 def api_eqp_loss_detail(request):
-    """Top Show rank bar 클릭 → tpm_eqp_loss 조회 (복수 flagdate 지원)"""
+    """Top Show rank bar 클릭 → eqp_loss_tpm 조회 (복수 flagdate 지원)"""
     flag      = request.GET.get("flag", "")
     yyyy      = request.GET.get("yyyy", "")
     flagdates = request.GET.getlist("flagdate")
