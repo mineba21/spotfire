@@ -485,43 +485,41 @@ function renderBarChart(flag, data) {
 
   const { flagdates, series } = data;
 
+  const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
+  const fontColor = isDark ? "#94a3b8" : "#64748b";
+  const hoverBg   = isDark ? "#1e293b" : "#0f172a";
+
+  // 각 bar 위에 표시할 cnt 텍스트.
+  // trace-level text + textposition:"outside" 를 쓰면 grouped bar 에서도 Plotly 가
+  // 각 bar 의 실제 x 좌표에 맞춰 정렬해 주므로 라벨이 겹치지 않는다.
+  const _fmtLabel = (v) => {
+    const n = Number(v);
+    return (Number.isFinite(n) && n !== 0)
+      ? n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : "";
+  };
+
   const traces = series.map((s, idx) => ({
     type:          "bar",
     name:          ptLabel(s.name),
     x:             flagdates,
     y:             s.y,
+    text:          (s.y || []).map(_fmtLabel),
+    textposition:  "outside",
+    textfont:      { size: 10, color: fontColor },
+    cliponaxis:    false,                              // 라벨이 plot area 밖으로 나가도 잘리지 않음
     marker:        { color: COLORS[idx % COLORS.length] },
     hovertemplate: "<b>%{x}</b><br>%{y:,.0f}<extra>%{fullData.name}</extra>",
   }));
 
-  const yLabel    = "cnt";
-  const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
-  const fontColor = isDark ? "#94a3b8" : "#64748b";
-  const hoverBg   = isDark ? "#1e293b" : "#0f172a";
+  const yLabel = "cnt";
 
+  // 라벨이 plot 위쪽에 표시되는 공간 확보 (최댓값의 22% headroom)
   const allY = series.flatMap((s) =>
     (s.y || []).map((v) => Number(v)).filter((v) => Number.isFinite(v))
   );
   const maxY     = allY.length ? Math.max(...allY) : 0;
   const yAxisMax = maxY > 0 ? maxY * 1.22 : 1;
-
-  const labelAnnotations = [];
-  series.forEach((s) => {
-    (s.y || []).forEach((v, i) => {
-      const y = Number(v);
-      if (!Number.isFinite(y) || y === 0) return;
-      labelAnnotations.push({
-        x: flagdates[i],
-        y,
-        xref: "x",
-        yref: "y",
-        text: y.toLocaleString(undefined, { maximumFractionDigits: 0 }),
-        showarrow: false,
-        yshift: 10,
-        font: { size: 10, color: fontColor },
-      });
-    });
-  });
 
   const layout = {
     barmode: "group",
@@ -529,7 +527,6 @@ function renderBarChart(flag, data) {
     xaxis:   { tickangle: -30, automargin: true, fixedrange: true },
     yaxis:   { title: { text: yLabel, font: { size: 11 } }, automargin: true, fixedrange: true, range: [0, yAxisMax] },
     legend:  { orientation: "h", y: -0.28, font: { size: 10 } },
-    annotations: labelAnnotations,
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
     font:          { family: "Inter, sans-serif", size: 11, color: fontColor },
