@@ -182,7 +182,7 @@ def get_eqp_loss_detail(flag: str, yyyy: str, flagdates, eqp_ids: list) -> list:
         EqpLossTpm.objects
         .filter(q)
         .values(*EQP_LOSS_QUERY_FIELDS)
-        .order_by("yyyymmdd", "act_time")[:MAX_RAW_ROWS]
+        .order_by("yyyymmdd", "act_time")
     )
 
     rows = []

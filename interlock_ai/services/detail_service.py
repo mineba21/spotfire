@@ -197,7 +197,7 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
         .filter(q)
         .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
         .values(*RAW_COLUMNS)
-        .order_by("yyyymmdd")[:MAX_RAW_ROWS]
+        .order_by("yyyymmdd")
     )
 
     rows = list(qs)

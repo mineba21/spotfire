@@ -36,6 +36,15 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+const FILTER_ORDER = [
+  { id: "filterLine",      dataKey: "lines",       field: "line"       },
+  { id: "filterSdwtProd",  dataKey: "sdwt_prods",  field: "sdwt_prod"  },
+  { id: "filterEqpModel",  dataKey: "eqp_models",  field: "eqp_model"  },
+  { id: "filterEqpId",     dataKey: "eqp_ids",     field: "eqp_id"     },
+  { id: "filterParamType", dataKey: "param_types", field: "param_type" },
+  { id: "filterParamName", dataKey: "param_names", field: "param_name" },
+];
+
 // 숫자 컬럼 집합 (우측 정렬 + 천단위 포맷)
 const NUMERIC_COLS = new Set(["loss_time_min", "cnt", "count"]);
 
@@ -142,11 +151,22 @@ const state = {
   /** @type {"raw" | "top"} */
   detailMode: "raw",
   copilot: { open: false },
+  topRawRows:    [],
+  topRawColumns: [],
+  topRawBadge:   "",
+  rawPage:       1,
+  rawPageSize:   25,
 };
 
 /** 기존 코드 호환용 — 첫 번째 선택된 bar 반환 (없으면 null) */
 function _getPrimarySelectedBar() {
   return state.selectedBars[0] || null;
+}
+
+let _autoApplyTimer = null;
+function _scheduleAutoApply(delay = 350) {
+  clearTimeout(_autoApplyTimer);
+  _autoApplyTimer = setTimeout(fetchReportData, delay);
 }
 
 
@@ -180,9 +200,14 @@ document.addEventListener("DOMContentLoaded", () => {
   on("resetFilterBtn",    "click",  resetFilters);
   // y_field 는 cnt 고정 (인터락 페이지는 count 만 사용)
 
-  // 필터 select 변경 시 옵션 동적 갱신 (차트 자동 새로고침 없음)
-  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterParamType", "filterParamName"]
-    .forEach((id) => on(id, "change", refreshFilterOptions));
+  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신
+  FILTER_ORDER.forEach((f, idx) => {
+    on(f.id, "change", () => { refreshFilterOptions(idx); _scheduleAutoApply(); });
+  });
+
+  ["rankM", "rankW", "rankD"].forEach((id) => {
+    on(id, "change", () => _scheduleAutoApply());
+  });
 
   document.querySelectorAll('input[name="detailMode"]').forEach((radio) => {
     radio.addEventListener("change", onDetailModeChange);
@@ -199,6 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
   on("copilotCloseBtn",   "click",  () => toggleCopilot(false));
   on("chartCaptureBtn",   "click",  captureTopChart);
   on("rawExcelBtn",       "click",  downloadRawExcel);
+  on("topRawExcelBtn",    "click",  downloadTopRawExcel);
   on("aiSendBtn",         "click",  sendAiQuestion);
   on("aiInput",           "keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAiQuestion(); }
@@ -300,18 +326,29 @@ function collectFiltersAsDict() {
 // ── 사이드바 선택 변경 시 필터 옵션 동적 갱신 ─────────────────────
 
 /**
- * 현재 선택된 필터 값을 백엔드에 보내 각 select의 옵션을 갱신한다.
- * 차트는 자동 새로고침하지 않는다 — Apply Filter 버튼으로만 갱신.
+ * 사이드바 필터 옵션 동적 갱신 (top-down cascading).
+ *
+ * @param {number} changedIdx  변경된 필터의 FILTER_ORDER 인덱스.
+ *   changedIdx 보다 아래 필터만 재구성. -1 이면 전체 재구성.
  */
-async function refreshFilterOptions() {
-  // 현재 선택값 → URLSearchParams
-  const params  = new URLSearchParams();
-  const filters = collectFiltersAsDict();      // ALL 제외된 선택값 dict
+async function refreshFilterOptions(changedIdx = -1) {
+  const allSelected = collectFiltersAsDict();
 
-  for (const [field, values] of Object.entries(filters)) {
-    for (const v of values) {
-      params.append(field, v);
-    }
+  let constraints;
+  if (changedIdx >= 0) {
+    const allowedFields = new Set(
+      FILTER_ORDER.slice(0, changedIdx + 1).map((f) => f.field)
+    );
+    constraints = Object.fromEntries(
+      Object.entries(allSelected).filter(([k]) => allowedFields.has(k))
+    );
+  } else {
+    constraints = allSelected;
+  }
+
+  const params = new URLSearchParams();
+  for (const [field, values] of Object.entries(constraints)) {
+    for (const v of values) params.append(field, v);
   }
 
   let data;
@@ -322,16 +359,14 @@ async function refreshFilterOptions() {
     if (!json.ok) return;
     data = json.data;
   } catch {
-    return;   // 네트워크 오류 시 조용히 무시
+    return;
   }
 
-  // 각 select 의 옵션을 새 목록으로 교체
-  _rebuildSelect("filterLine",      data.lines,       "line");
-  _rebuildSelect("filterSdwtProd",  data.sdwt_prods,  "sdwt_prod");
-  _rebuildSelect("filterEqpModel",  data.eqp_models,  "eqp_model");
-  _rebuildSelect("filterEqpId",     data.eqp_ids,     "eqp_id");
-  _rebuildSelect("filterParamType", data.param_types, "param_type");
-  _rebuildSelect("filterParamName", data.param_names, "param_name");
+  FILTER_ORDER.forEach((f, idx) => {
+    if (changedIdx < 0 || idx > changedIdx) {
+      _rebuildSelect(f.id, data[f.dataKey] || [], f.field);
+    }
+  });
 }
 
 /**
@@ -464,12 +499,37 @@ function renderBarChart(flag, data) {
   const fontColor = isDark ? "#94a3b8" : "#64748b";
   const hoverBg   = isDark ? "#1e293b" : "#0f172a";
 
+  const allY = series.flatMap((s) =>
+    (s.y || []).map((v) => Number(v)).filter((v) => Number.isFinite(v))
+  );
+  const maxY     = allY.length ? Math.max(...allY) : 0;
+  const yAxisMax = maxY > 0 ? maxY * 1.22 : 1;
+
+  const labelAnnotations = [];
+  series.forEach((s) => {
+    (s.y || []).forEach((v, i) => {
+      const y = Number(v);
+      if (!Number.isFinite(y) || y === 0) return;
+      labelAnnotations.push({
+        x: flagdates[i],
+        y,
+        xref: "x",
+        yref: "y",
+        text: y.toLocaleString(undefined, { maximumFractionDigits: 0 }),
+        showarrow: false,
+        yshift: 10,
+        font: { size: 10, color: fontColor },
+      });
+    });
+  });
+
   const layout = {
     barmode: "group",
-    margin:  { t: 8, b: 56, l: 46, r: 8 },
+    margin:  { t: 34, b: 56, l: 46, r: 8 },
     xaxis:   { tickangle: -30, automargin: true, fixedrange: true },
-    yaxis:   { title: { text: yLabel, font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis:   { title: { text: yLabel, font: { size: 11 } }, automargin: true, fixedrange: true, range: [0, yAxisMax] },
     legend:  { orientation: "h", y: -0.28, font: { size: 10 } },
+    annotations: labelAnnotations,
     plot_bgcolor:  "transparent",
     paper_bgcolor: "transparent",
     font:          { family: "Inter, sans-serif", size: 11, color: fontColor },
@@ -638,13 +698,16 @@ function onDetailModeChange(e) {
 function renderRawTable() {
   const thead   = document.getElementById("rawTableHead");
   const tbody   = document.getElementById("rawTableBody");
+  const paginEl = document.getElementById("rawPagination");
   const emptyEl = document.getElementById("rawTableEmpty");
 
   thead.innerHTML = "";
   tbody.innerHTML = "";
+  state.rawPage   = 1;
 
   if (!state.rawColumns.length || !state.rawRows.length) {
     if (emptyEl) emptyEl.style.display = "block";
+    if (paginEl) paginEl.innerHTML = "";
     return;
   }
   if (emptyEl) emptyEl.style.display = "none";
@@ -660,10 +723,14 @@ function renderRawTable() {
   });
   thead.appendChild(headerRow);
 
-  function _doRenderRawBody(rows) {
+  let _currentRows = state.rawRows;
+
+  function _renderPageBody() {
+    const start    = (state.rawPage - 1) * state.rawPageSize;
+    const pageRows = _currentRows.slice(start, start + state.rawPageSize);
     tbody.innerHTML = "";
-    const fragment = document.createDocumentFragment();
-    rows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+    const fragment  = document.createDocumentFragment();
+    pageRows.forEach((row) => {
       const tr = document.createElement("tr");
       state.rawColumns.forEach((col) => {
         const td  = document.createElement("td");
@@ -683,25 +750,57 @@ function renderRawTable() {
       fragment.appendChild(tr);
     });
     tbody.appendChild(fragment);
+  }
 
-    if (rows.length > MAX_RENDER_ROWS) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan     = state.rawColumns.length;
-      td.className   = "sf-table-truncate-msg";
-      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    }
+  function _renderRawPagination() {
+    if (!paginEl) return;
+    const total      = _currentRows.length;
+    const totalPages = Math.max(1, Math.ceil(total / state.rawPageSize));
+    const from       = total ? (state.rawPage - 1) * state.rawPageSize + 1 : 0;
+    const to         = Math.min(state.rawPage * state.rawPageSize, total);
+
+    paginEl.innerHTML = `
+      <div class="sf-pagination">
+        <select class="sf-select-sm sf-pagination__size" id="rawPageSizeSelect">
+          <option value="25" ${state.rawPageSize === 25 ? "selected" : ""}>25 / 페이지</option>
+          <option value="50" ${state.rawPageSize === 50 ? "selected" : ""}>50 / 페이지</option>
+        </select>
+        <span class="sf-pagination__info">${from.toLocaleString()}–${to.toLocaleString()} / ${total.toLocaleString()}건</span>
+        <div class="sf-pagination__nav">
+          <button class="sf-pagination__btn" id="rawPrevBtn" ${state.rawPage <= 1 ? "disabled" : ""}>&#8249;</button>
+          <span class="sf-pagination__page">${state.rawPage} / ${totalPages}</span>
+          <button class="sf-pagination__btn" id="rawNextBtn" ${state.rawPage >= totalPages ? "disabled" : ""}>&#8250;</button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("rawPageSizeSelect")?.addEventListener("change", (e) => {
+      state.rawPageSize = Number(e.target.value);
+      state.rawPage     = 1;
+      _renderPageBody();
+      _renderRawPagination();
+    });
+    document.getElementById("rawPrevBtn")?.addEventListener("click", () => {
+      if (state.rawPage > 1) { state.rawPage--; _renderPageBody(); _renderRawPagination(); }
+    });
+    document.getElementById("rawNextBtn")?.addEventListener("click", () => {
+      if (state.rawPage < totalPages) { state.rawPage++; _renderPageBody(); _renderRawPagination(); }
+    });
+  }
+
+  function _doRenderRawBody(sortedRows) {
+    _currentRows  = sortedRows;
+    state.rawPage = 1;
+    _renderPageBody();
+    _renderRawPagination();
   }
 
   _attachSorting(thead, state.rawColumns, "rawTable", () => state.rawRows, _doRenderRawBody);
 
   const ss = _sortState["rawTable"];
-  const initialRows = (ss && ss.col)
-    ? _sortRows(state.rawRows, ss.col, ss.dir)
-    : state.rawRows;
-  _doRenderRawBody(initialRows);
+  if (ss && ss.col) _currentRows = _sortRows(state.rawRows, ss.col, ss.dir);
+  _renderPageBody();
+  _renderRawPagination();
 }
 
 // ── Top Show (cnt 기반 그룹 집계) ────────────────────────────
@@ -923,6 +1022,10 @@ function _renderTopRaw(rows, badgeText) {
   countEl.textContent = `${rows.length.toLocaleString()}건`;
   panel.style.display = "block";
 
+  state.topRawRows    = rows;
+  state.topRawColumns = state.rawColumns.length ? state.rawColumns : Object.keys(rows[0]);
+  state.topRawBadge   = badgeText;
+
   // 헤더
   thead.innerHTML = "";
   const columns   = state.rawColumns.length ? state.rawColumns : Object.keys(rows[0]);
@@ -991,6 +1094,9 @@ function _renderTopRaw(rows, badgeText) {
 function closeTopRaw() {
   const panel = document.getElementById("topRawPanel");
   if (panel) panel.style.display = "none";
+  state.topRawRows    = [];
+  state.topRawColumns = [];
+  state.topRawBadge   = "";
 }
 
 function setDetailLoading(isLoading) {
@@ -1326,93 +1432,98 @@ async function captureTopChart() {
 
 // ── Section 14: Raw Data Excel 다운로드 ──────────────────────────
 
-/**
- * state.rawRows 를 SheetJS 로 xlsx 파일로 변환해 다운로드한다.
- *
- * - 컬럼 순서: state.rawColumns (RAW_COLUMNS 기준)
- * - 파일명: rawdata_<flagdate>_<yyyymmdd>.xlsx
- * - 헤더 행에 배경색(인디고) + 볼드 스타일 적용
- */
-function downloadRawExcel() {
-  if (!state.rawRows || !state.rawRows.length) {
-    showToast("다운로드할 데이터가 없습니다.", "warn");
+function _downloadAsExcel(rows, columns, filenamePrefix, sheetName, extraLabel) {
+  if (!rows || !rows.length) {
+    showToast("다운로드할 데이터가 없습니다.");
     return;
   }
-
   if (typeof XLSX === "undefined") {
-    showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.", "warn");
+    showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.");
     return;
   }
 
-  const btn      = document.getElementById("rawExcelBtn");
-  const origHTML = btn ? btn.innerHTML : "";
+  const cols = (columns && columns.length) ? columns : Object.keys(rows[0]);
+
+  const sheetData = [
+    cols,
+    ...rows.map((row) => cols.map((c) => {
+      const val = row[c] ?? "";
+      return c === "param_type" ? ptLabel(String(val)) : val;
+    })),
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  ws["!cols"] = cols.map((col) => {
+    const maxLen = Math.max(
+      col.length,
+      ...rows.slice(0, 200).map((r) => String(r[col] ?? "").length)
+    );
+    return { wch: Math.min(maxLen + 2, 40) };
+  });
+
+  cols.forEach((_, ci) => {
+    const cellAddr = XLSX.utils.encode_cell({ r: 0, c: ci });
+    if (!ws[cellAddr]) return;
+    ws[cellAddr].s = {
+      font:      { bold: true, color: { rgb: "FFFFFF" } },
+      fill:      { fgColor: { rgb: "6366F1" } },
+      alignment: { horizontal: "center" },
+    };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || "Sheet1");
+
+  const bars = state.selectedBars || [];
+  let barLabel = "all";
+  if (bars.length === 1) {
+    barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
+  } else if (bars.length > 1) {
+    const flag  = bars[0].flag;
+    const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
+    barLabel = `${flag}${dates}`;
+  }
+
+  const extra = extraLabel ? `_${extraLabel.replace(/[^\w가-힣]+/g, "")}` : "";
+  const now = new Date();
+  const ts  = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
+  const fileName = `${filenamePrefix}_${barLabel}${extra}_${ts}.xlsx`;
+
+  XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
+  showToast(`📥 ${fileName} 다운로드 완료!`);
+}
+
+function downloadRawExcel() {
+  const btn  = document.getElementById("rawExcelBtn");
+  const orig = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.innerHTML = "저장 중…"; }
-
   try {
-    const columns = state.rawColumns.length
-      ? state.rawColumns
-      : Object.keys(state.rawRows[0]);
-
-    // ── 데이터 배열 구성 (헤더 + 행) ──────────────────────────
-    const sheetData = [
-      columns,   // 헤더 행
-      ...state.rawRows.map((row) =>
-        columns.map((col) => {
-          const val = row[col] ?? "";
-          return col === "param_type" ? ptLabel(String(val)) : val;
-        })
-      ),
-    ];
-
-    const ws = XLSX.utils.aoa_to_sheet(sheetData);
-
-    // ── 열 너비 자동 조정 ─────────────────────────────────────
-    ws["!cols"] = columns.map((col) => {
-      const maxLen = Math.max(
-        col.length,
-        ...state.rawRows.slice(0, 200).map((r) => String(r[col] ?? "").length)
-      );
-      return { wch: Math.min(maxLen + 2, 40) };
-    });
-
-    // ── 헤더 셀 스타일 (볼드 + 배경색) ───────────────────────
-    columns.forEach((_, ci) => {
-      const cellAddr = XLSX.utils.encode_cell({ r: 0, c: ci });
-      if (!ws[cellAddr]) return;
-      ws[cellAddr].s = {
-        font:      { bold: true, color: { rgb: "FFFFFF" } },
-        fill:      { fgColor: { rgb: "6366F1" } },
-        alignment: { horizontal: "center" },
-      };
-    });
-
-    // ── Workbook 생성 및 다운로드 ─────────────────────────────
-    const wb        = XLSX.utils.book_new();
-    const sheetName = "RawData";
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-
-    // 파일명: rawdata_<flag><flagdate>_YYYYMMDD_HHmmss.xlsx
-    const bars     = state.selectedBars || [];
-    let barLabel   = "all";
-    if (bars.length === 1) {
-      barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
-    } else if (bars.length > 1) {
-      const flag  = bars[0].flag;
-      const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
-      barLabel = `${flag}${dates}`;
-    }
-    const now      = new Date();
-    const ts       = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
-    const fileName = `rawdata_${barLabel}_${ts}.xlsx`;
-
-    XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
-
-    showToast(`📥 ${fileName} 다운로드 완료!`);
-
+    _downloadAsExcel(state.rawRows, state.rawColumns, "rawdata", "RawData");
   } catch (err) {
     console.error("[downloadRawExcel]", err);
-    showToast(`Excel 저장 실패: ${err.message}`, "error");
+    showToast(`Excel 저장 실패: ${err.message}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+  }
+}
+
+function downloadTopRawExcel() {
+  const btn  = document.getElementById("topRawExcelBtn");
+  const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = "저장 중…"; }
+  try {
+    _downloadAsExcel(
+      state.topRawRows,
+      state.topRawColumns,
+      "top_rawdata",
+      "TopRawData",
+      state.topRawBadge,
+    );
+  } catch (err) {
+    console.error("[downloadTopRawExcel]", err);
+    showToast(`Excel 저장 실패: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
   }
 }
