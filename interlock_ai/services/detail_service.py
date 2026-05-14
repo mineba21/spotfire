@@ -197,7 +197,7 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
         .filter(q)
         .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
         .values(*RAW_COLUMNS)
-        .order_by("yyyymmdd")
+        .order_by("yyyymmdd")[:MAX_RAW_ROWS]
     )
 
     rows = list(qs)
@@ -205,3 +205,55 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
     logger.info("[Detail] 조회 결과 %d건", len(rows))
 
     return rows
+
+
+def iter_raw_detail_export(flag: str, yyyy: str, flagdates, filters: dict):
+    """
+    Excel export 용 raw 행 iterator.
+
+    get_raw_detail 와 같은 scope (sidebar 필터 + 기간) 이지만 MAX_RAW_ROWS limit
+    없이 queryset.iterator() 를 반환한다. openpyxl write_only 모드와 조합해 메모리
+    효율적 스트리밍 가능.
+    """
+    if isinstance(flagdates, str):
+        flagdates = [flagdates]
+    flagdates = [fd for fd in flagdates if fd]
+    if not flagdates:
+        return iter(())
+
+    starts, ends = [], []
+    for fd in flagdates:
+        s, e = get_date_range(flag, yyyy, fd)
+        if s and e:
+            starts.append(s)
+            ends.append(e)
+    if not starts:
+        return iter(())
+
+    start_ymd, end_ymd = min(starts), max(ends)
+    q = build_filter_q(filters)
+
+    sample_qs  = SpotfireRaw.objects.values_list("yyyymmdd", flat=True).first()
+    sample_fmt = str(sample_qs) if sample_qs else ""
+    has_hyphen = "-" in sample_fmt
+
+    if has_hyphen:
+        def to_hyphen(ymd8):
+            if len(ymd8) == 8 and ymd8.isdigit():
+                return f"{ymd8[:4]}-{ymd8[4:6]}-{ymd8[6:8]}"
+            return ymd8
+        start_filter = to_hyphen(start_ymd)
+        end_filter   = to_hyphen(end_ymd)
+    else:
+        start_filter = start_ymd
+        end_filter   = end_ymd
+
+    qs = (
+        SpotfireRaw.objects
+        .filter(q)
+        .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
+        .values(*RAW_COLUMNS)
+        .order_by("yyyymmdd")
+    )
+
+    return qs.iterator(chunk_size=1000)

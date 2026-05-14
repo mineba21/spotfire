@@ -1650,18 +1650,28 @@ function _downloadAsExcel(rows, columns, filenamePrefix, sheetName, extraLabel) 
   showToast(`📥 ${fileName} 다운로드 완료!`);
 }
 
+/**
+ * 서버의 click-detail-export endpoint 를 호출해 .xlsx 다운로드.
+ *
+ * 기존엔 state.rawRows (UI 가 받은 MAX_RAW_ROWS cap 적용된 데이터) 를 JS XLSX 로
+ * 변환했으나, cap 이 복구되면서 화면엔 5000건만 표시되더라도 Excel 은 전체
+ * 데이터가 필요. 서버에서 openpyxl 로 limit 없이 .xlsx 를 직접 생성/스트림한다.
+ */
 function downloadRawExcel() {
-  const btn  = document.getElementById("rawExcelBtn");
-  const orig = btn?.innerHTML;
-  if (btn) { btn.disabled = true; btn.innerHTML = "저장 중…"; }
-  try {
-    _downloadAsExcel(state.rawRows, state.rawColumns, "stoploss_rawdata", "RawData");
-  } catch (err) {
-    console.error("[downloadRawExcel]", err);
-    showToast(`Excel 저장 실패: ${err.message}`);
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+  const bars = state.selectedBars || [];
+  if (!bars.length) {
+    showToast("bar 를 먼저 클릭하세요.");
+    return;
   }
+
+  const params = collectFilters();
+  params.append("flag", bars[0].flag);
+  params.append("yyyy", bars[0].yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
+
+  // Content-Disposition: attachment 덕분에 navigation 없이 다운로드 트리거됨
+  window.location.href = `${URLS.clickDetailExport}?${params.toString()}`;
+  showToast("📥 Excel 생성 중…");
 }
 
 function downloadTopRawExcel() {
