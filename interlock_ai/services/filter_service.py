@@ -13,6 +13,8 @@ services/filter_service.py
 
 from django.db.models import Q
 
+from interlock_ai.models import LINE_REMAP
+
 # ─────────────────────────────────────────────────────────────────
 # sidebar 에서 multi-select 로 넘어오는 필터 필드 목록
 # 순서는 sidebar 표시 순서와 맞춘다
@@ -80,9 +82,16 @@ def build_filter_q(filters: dict) -> Q:
             if field == "line":
                 line_q = Q()
                 for v in values:
-                    prefix = str(v)[:2]
-                    if prefix:
-                        line_q |= Q(line__startswith=prefix)
+                    # LINE_REMAP 에서 dst == v 인 src 들을 OR 로 묶어 startswith 매칭.
+                    # 매핑이 없으면 fallback 으로 앞 2자리 prefix 사용.
+                    sources = [src for src, dst in LINE_REMAP.items() if dst == v]
+                    if sources:
+                        for src in sources:
+                            line_q |= Q(line__startswith=src)
+                    else:
+                        prefix = str(v)[:2]
+                        if prefix:
+                            line_q |= Q(line__startswith=prefix)
                 if line_q:
                     q &= line_q
                 continue

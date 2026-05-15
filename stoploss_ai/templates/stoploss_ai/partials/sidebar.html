@@ -33,12 +33,12 @@
     </div>
   </div>
 
-  <!-- Area (구 Line) -->
+  <!-- Line (interlock 과 동일 명칭) -->
   <div class="sf-sidebar__section">
-    <label class="sf-sidebar__section-label" for="filterArea">Area</label>
-    <select id="filterArea" name="area" multiple class="sf-select">
+    <label class="sf-sidebar__section-label" for="filterLine">Line</label>
+    <select id="filterLine" name="line" multiple class="sf-select">
       <option value="ALL" selected>ALL</option>
-      {% for v in filter_options.areas %}
+      {% for v in filter_options.lines %}
         <option value="{{ v }}">{{ v }}</option>
       {% endfor %}
     </select>

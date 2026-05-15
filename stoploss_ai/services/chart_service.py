@@ -9,7 +9,7 @@ stoploss_ai/services/chart_service.py
 - yyyy_map 을 반환해 JS bar 클릭 시 정확한 연도 참조가 가능하다
 
 [변경 이력]
-  - line → area 반영
+  - area(DB) ↔ line(앱) 통일 — 모델 필드 line, DB 컬럼 area
   - LOSS_COLUMNS 에 eng, etc, stepchg, std_time, rd 추가
 """
 
@@ -46,7 +46,7 @@ def get_chart_data(
         .filter(q)
         .values(
             "flag", "yyyy", "flagdate",
-            "area", "sdwt_prod", "eqp_model", "eqp_id", "prc_group",
+            "line", "sdwt_prod", "eqp_model", "eqp_id", "prc_group",
             "plan_time",
             "stoploss", "pm", "qual", "bm",
             "eng", "etc", "stepchg", "std_time", "rd",

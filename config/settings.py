@@ -174,6 +174,12 @@ USE_TZ = False
 
 STATIC_URL = 'static/'
 
+# 페이지 간 공유되는 static (예: sf-shared-filters.js) 는 프로젝트 루트 static/ 에 둔다.
+# 각 앱의 static/ 디렉토리는 INSTALLED_APPS 의 staticfiles finder 가 자동 수집한다.
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 

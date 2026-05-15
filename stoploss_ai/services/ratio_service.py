@@ -5,7 +5,7 @@ stoploss_ai/services/ratio_service.py
 
 ─── 설계 원칙 ────────────────────────────────────────────────────
   1. group_by 컬럼(기본: state) 을 grouping key 로 사용한다.
-     → "어떤 원인(state/eqp_model/area 등)이 몇 분 정지로스를 유발했나" 분석.
+     → "어떤 원인(state/eqp_model/line 등)이 몇 분 정지로스를 유발했나" 분석.
 
   2. loss_time_min 은 raw event duration 합이 아니다.
      tpm_eqp_loss 의 raw duration 을 EQP별 report_stoploss.stoploss 합에 비례 배분한
@@ -19,7 +19,7 @@ stoploss_ai/services/ratio_service.py
   4. pct_vs_eqp  : group 이 발생한 설비들의 stoploss 합 대비 %
      pct_vs_model: 해당 기종 stoploss 합 대비 %
      pct_vs_sdwt : 해당 분임조 stoploss 합 대비 %
-     pct_vs_area : 해당 라인(area) stoploss 합 대비 %
+     pct_vs_line : 해당 라인 stoploss 합 대비 %
      pct_vs_total: 전체 period stoploss 대비 %
 
 ─── 컬럼(그룹) 추가 방법 ─────────────────────────────────────────
@@ -29,7 +29,7 @@ stoploss_ai/services/ratio_service.py
       3) tpm_eqp_loss.values() 에 컬럼명 추가
       4) 프론트(dashboard.js) RATIO_GROUP_OPTIONS 에 옵션 추가
 
-  [B] report_stoploss 메타 컬럼을 group_by 로 쓰는 경우 (eqp_model, area, sdwt_prod):
+  [B] report_stoploss 메타 컬럼을 group_by 로 쓰는 경우 (eqp_model, line, sdwt_prod):
       이미 eqp_meta 에서 lookup 가능 — (A)와 동일하게 추가만 하면 됨.
 
   [C] 외부 테이블(SpotfireRaw 의 param_type / param_name) 을 쓰려면:
@@ -40,7 +40,6 @@ stoploss_ai/services/ratio_service.py
   (param_type / param_name 은 Raw 전용 컬럼이므로 [C] 구현 후 options 에 노출)
 ────────────────────────────────────────────────────────────────
 """
-import datetime
 import logging
 from collections import defaultdict
 from typing import Optional
@@ -49,6 +48,7 @@ from django.db.models import Q
 
 from stoploss_ai.models import TpmEqpLoss, StoplossReport
 from stoploss_ai.services.filter_service import build_q
+from stoploss_ai.services.detail_service import _calc_loss_min  # noqa: F401 — 공용
 from interlock_ai.services.detail_service import get_date_range
 
 logger = logging.getLogger(__name__)
@@ -58,39 +58,10 @@ logger = logging.getLogger(__name__)
 #   - state      : tpm_eqp_loss.state (기본)
 #   - eqp_id     : tpm_eqp_loss.eqp_id
 #   - eqp_model  : report_stoploss 메타 조회
-#   - area       : report_stoploss 메타 조회
+#   - line       : report_stoploss 메타 조회 (구 area, DB 컬럼명은 area 유지)
 #   - sdwt_prod  : report_stoploss 메타 조회
 # ─────────────────────────────────────────────────────────────────
-VALID_GROUP_BY = {"state", "eqp_id", "eqp_model", "area", "sdwt_prod"}
-
-_DATETIME_FMTS = [
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%Y%m%d%H%M%S",
-    "%Y%m%d %H:%M:%S",
-    "%Y/%m/%d %H:%M:%S",
-]
-
-
-def _parse_dt(s: str) -> Optional[datetime.datetime]:
-    if not s:
-        return None
-    s = str(s).strip()
-    for fmt in _DATETIME_FMTS:
-        try:
-            return datetime.datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _calc_loss_min(start_str, end_str) -> float:
-    start = _parse_dt(start_str)
-    end   = _parse_dt(end_str)
-    if start is None or end is None:
-        return 0.0
-    diff = (end - start).total_seconds() / 60
-    return max(0.0, round(diff, 1))
+VALID_GROUP_BY = {"state", "eqp_id", "eqp_model", "line", "sdwt_prod"}
 
 
 def _collect_date_ranges(flag: str, yyyy: str, flagdates: list):
@@ -114,11 +85,11 @@ def get_ratio_analysis(
     (flag, yyyy, flagdates) + sidebar 필터 + group_by 기준으로 기여도를 분석한다.
 
     flagdates: 단일 str 또는 list[str] (멀티 bar 선택 지원)
-    group_by : state / eqp_id / eqp_model / area / sdwt_prod
+    group_by : state / eqp_id / eqp_model / line / sdwt_prod
 
     반환: loss_time_min 내림차순 정렬된 dict 리스트
         [{ group: "...", loss_time_min, pct_vs_eqp, pct_vs_model,
-           pct_vs_sdwt, pct_vs_area, pct_vs_total }, ...]
+           pct_vs_sdwt, pct_vs_line, pct_vs_total }, ...]
     """
     if isinstance(flagdates, str):
         flagdates = [flagdates]
@@ -136,35 +107,35 @@ def get_ratio_analysis(
     report_rows = list(
         StoplossReport.objects
         .filter(q_report)
-        .values("eqp_id", "eqp_model", "sdwt_prod", "area", "stoploss")
+        .values("eqp_id", "eqp_model", "sdwt_prod", "line", "stoploss")
     )
 
     if not report_rows:
         return []
 
-    idx_eqp = defaultdict(float)
+    idx_eqp   = defaultdict(float)
     idx_model = defaultdict(float)
-    idx_sdwt = defaultdict(float)
-    idx_area = defaultdict(float)
-    eqp_meta = {}
+    idx_sdwt  = defaultdict(float)
+    idx_line  = defaultdict(float)
+    eqp_meta  = {}
 
     for row in report_rows:
-        eqp_id = row["eqp_id"] or ""
+        eqp_id    = row["eqp_id"]    or ""
         eqp_model = row["eqp_model"] or ""
         sdwt_prod = row["sdwt_prod"] or ""
-        area = row["area"] or ""
-        stoploss = row["stoploss"] or 0.0
+        line      = row["line"]      or ""
+        stoploss  = row["stoploss"]  or 0.0
 
-        idx_eqp[eqp_id] += stoploss
+        idx_eqp[eqp_id]     += stoploss
         idx_model[eqp_model] += stoploss
-        idx_sdwt[sdwt_prod] += stoploss
-        idx_area[area] += stoploss
+        idx_sdwt[sdwt_prod]  += stoploss
+        idx_line[line]       += stoploss
 
         if eqp_id and eqp_id not in eqp_meta:
             eqp_meta[eqp_id] = {
                 "eqp_model": eqp_model,
                 "sdwt_prod": sdwt_prod,
-                "area": area,
+                "line":      line,
             }
 
     total_stoploss = sum(idx_eqp.values())
@@ -198,13 +169,13 @@ def get_ratio_analysis(
         raw_total_by_eqp[eqp_id] += raw_loss
 
     # ── Step 4: group_by 기준 allocated loss 집계 ────────────────
-    # group_key → { loss_time, eqp_ids, eqp_models, sdwt_prods, areas }
+    # group_key → { loss_time, eqp_ids, eqp_models, sdwt_prods, lines }
     combo: dict = defaultdict(lambda: {
         "loss_time":  0.0,
         "eqp_ids":    set(),
         "eqp_models": set(),
         "sdwt_prods": set(),
-        "areas":      set(),
+        "lines":      set(),
     })
 
     for row, raw_loss in prepared_events:
@@ -222,13 +193,13 @@ def get_ratio_analysis(
 
         eqp_model = meta["eqp_model"]
         sdwt_prod = meta["sdwt_prod"]
-        area = meta["area"]
+        line      = meta["line"]
 
         group_key_map = {
             "state":     row["state"]   or "(unknown)",
             "eqp_id":    eqp_id         or "(unknown)",
             "eqp_model": eqp_model      or "(unknown)",
-            "area":      area           or "(unknown)",
+            "line":      line           or "(unknown)",
             "sdwt_prod": sdwt_prod      or "(unknown)",
         }
         group_key = group_key_map[group_by]
@@ -237,7 +208,7 @@ def get_ratio_analysis(
         combo[group_key]["eqp_ids"].add(eqp_id)
         combo[group_key]["eqp_models"].add(eqp_model)
         combo[group_key]["sdwt_prods"].add(sdwt_prod)
-        combo[group_key]["areas"].add(area)
+        combo[group_key]["lines"].add(line)
 
     if not combo:
         return []
@@ -263,7 +234,7 @@ def get_ratio_analysis(
         denom_eqp   = _sum_denom(idx_eqp,   data["eqp_ids"])
         denom_model = _sum_denom(idx_model, data["eqp_models"])
         denom_sdwt  = _sum_denom(idx_sdwt,  data["sdwt_prods"])
-        denom_area  = _sum_denom(idx_area,  data["areas"])
+        denom_line  = _sum_denom(idx_line,  data["lines"])
 
         result.append({
             # group_by 키로 실제 컬럼명 반환 (프론트에서 동일 키 사용)
@@ -272,7 +243,7 @@ def get_ratio_analysis(
             "pct_vs_eqp":    _pct(data["loss_time"], denom_eqp),
             "pct_vs_model":  _pct(data["loss_time"], denom_model),
             "pct_vs_sdwt":   _pct(data["loss_time"], denom_sdwt),
-            "pct_vs_area":   _pct(data["loss_time"], denom_area),
+            "pct_vs_line":   _pct(data["loss_time"], denom_line),
             "pct_vs_total":  _pct(data["loss_time"], total_stoploss),
         })
 

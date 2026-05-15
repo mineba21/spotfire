@@ -45,6 +45,34 @@ RAW_COLUMNS = [
 MAX_RAW_ROWS = 5000
 
 
+# ─── 데이터 후처리 설정 ──────────────────────────────────────────
+# eqp_id 에 이 단어 중 하나라도 포함되면 raw_detail 결과에서 제외 (대소문자 무시).
+# DB 단계 .exclude(eqp_id__icontains=...) 로 처리되어 효율적.
+# 빈 list 일 때는 무영향 (기존 동작과 동일).
+EQP_ID_EXCLUDE_KEYWORDS = [
+    # TODO: 운영 환경에서 실제 제외 키워드 채워넣기
+    # 예: "TEST", "DUMMY", "VIRT",
+]
+
+# sdwt_prod 값 치환 (key=DB 원본, value=화면 표시값). 정확 일치 기준.
+# 사이드바 드롭다운은 DB 원본 값 그대로 표시 (필터링은 정상 작동).
+# 빈 dict 일 때는 무영향.
+SDWT_PROD_REPLACEMENTS = {
+    # TODO: 운영 환경에서 실제 치환 매핑 채워넣기
+    # 예: "OLD_VAL_1": "NEW_VAL_1",
+}
+
+
+def _apply_sdwt_replacement(row: dict) -> dict:
+    """SDWT_PROD_REPLACEMENTS 가 비어있지 않으면 sdwt_prod 값을 치환한다."""
+    if SDWT_PROD_REPLACEMENTS:
+        sp = row.get("sdwt_prod")
+        if sp in SDWT_PROD_REPLACEMENTS:
+            row = dict(row)  # 원본 dict 가 generator 에서 재사용될 수 있으므로 복사
+            row["sdwt_prod"] = SDWT_PROD_REPLACEMENTS[sp]
+    return row
+
+
 def get_date_range(flag: str, yyyy: str, flagdate: str):
     """
     (flag, yyyy, flagdate) 로부터 yyyymmdd 범위 문자열 (start_ymd, end_ymd) 을 반환한다.
@@ -196,11 +224,26 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
         SpotfireRaw.objects
         .filter(q)
         .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
-        .values(*RAW_COLUMNS)
-        .order_by("yyyymmdd")[:MAX_RAW_ROWS]
+    )
+
+    # eqp_id 제외 키워드 (DB 단계 — 효율적)
+    for kw in EQP_ID_EXCLUDE_KEYWORDS:
+        if kw:
+            qs = qs.exclude(eqp_id__icontains=kw)
+
+    qs = (
+        qs.values(*RAW_COLUMNS)
+          .order_by("yyyymmdd")[:MAX_RAW_ROWS]
     )
 
     rows = list(qs)
+
+    # sdwt_prod 치환 (Python 단계 — 사이드바는 원본 그대로)
+    if SDWT_PROD_REPLACEMENTS:
+        for row in rows:
+            sp = row.get("sdwt_prod")
+            if sp in SDWT_PROD_REPLACEMENTS:
+                row["sdwt_prod"] = SDWT_PROD_REPLACEMENTS[sp]
 
     logger.info("[Detail] 조회 결과 %d건", len(rows))
 
@@ -252,8 +295,23 @@ def iter_raw_detail_export(flag: str, yyyy: str, flagdates, filters: dict):
         SpotfireRaw.objects
         .filter(q)
         .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
-        .values(*RAW_COLUMNS)
-        .order_by("yyyymmdd")
+    )
+    for kw in EQP_ID_EXCLUDE_KEYWORDS:
+        if kw:
+            qs = qs.exclude(eqp_id__icontains=kw)
+
+    qs = (
+        qs.values(*RAW_COLUMNS)
+          .order_by("yyyymmdd")
     )
 
-    return qs.iterator(chunk_size=1000)
+    # SDWT_PROD_REPLACEMENTS 가 비어있으면 raw iterator 그대로,
+    # 비어있지 않으면 row 마다 치환한 dict 를 yield 하는 wrapper 반환.
+    base = qs.iterator(chunk_size=1000)
+    if not SDWT_PROD_REPLACEMENTS:
+        return base
+
+    def _replaced():
+        for row in base:
+            yield _apply_sdwt_replacement(row)
+    return _replaced()

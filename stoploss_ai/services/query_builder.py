@@ -6,11 +6,9 @@ spotfire_ai 의 query_builder.py 와 동일한 execute_query 인터페이스.
 """
 from django.db.models import Count, Avg, Sum, Max, Min, Q
 from stoploss_ai.models import (
-    EqpLossTpm,
     TpmEqpLoss,
     StoplossReport,
     TABLE_EQP_LOSS,
-    TABLE_EQP_LOSS_TPM,
     TABLE_STOPLOSS_REPORT,
 )
 
@@ -30,9 +28,7 @@ def execute_stoploss_query(qj: dict) -> list:
     반환: dict list (최대 limit 건)
     """
     table = qj.get("table")
-    if table == TABLE_EQP_LOSS_TPM:
-        qs = EqpLossTpm.objects.all()
-    elif table == TABLE_EQP_LOSS:
+    if table == TABLE_EQP_LOSS:
         qs = TpmEqpLoss.objects.all()
     elif table == TABLE_STOPLOSS_REPORT:
         qs = StoplossReport.objects.all()

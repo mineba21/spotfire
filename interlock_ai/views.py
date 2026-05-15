@@ -16,7 +16,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from interlock_ai.models import SpotfireReport, SpotfireRaw
+from interlock_ai.models import SpotfireReport, SpotfireRaw, LINE_REMAP
 from interlock_ai.services.filter_service import parse_sidebar_filters, build_filter_q
 from interlock_ai.services.chart_service  import get_chart_data, parse_rank_limits
 from interlock_ai.services.detail_service import get_raw_detail, iter_raw_detail_export, RAW_COLUMNS
@@ -61,7 +61,20 @@ def _get_distinct(field: str) -> list:
         .distinct()
         .order_by(field)
     )
-    return sorted({v for v in values if v})
+    if field != "line":
+        return sorted({v for v in values if v})
+
+    # line 은 LINE_REMAP 매핑 적용 후 dedup, 미매칭은 [:2] fallback
+    out = set()
+    for v in values:
+        if not v:
+            continue
+        mapped = next(
+            (dst for src, dst in LINE_REMAP.items() if str(v).startswith(src)),
+            str(v)[:2],
+        )
+        out.add(mapped)
+    return sorted(out)
 
 
 def _get_distinct_raw(field: str) -> list:
@@ -196,7 +209,19 @@ def api_filter_options(request):
             .distinct()
             .order_by(field)
         )
-        return sorted({v for v in values if v})
+        if field != "line":
+            return sorted({v for v in values if v})
+
+        out = set()
+        for v in values:
+            if not v:
+                continue
+            mapped = next(
+                (dst for src, dst in LINE_REMAP.items() if str(v).startswith(src)),
+                str(v)[:2],
+            )
+            out.add(mapped)
+        return sorted(out)
 
     def _filtered_distinct_raw(field: str) -> list:
         values = (

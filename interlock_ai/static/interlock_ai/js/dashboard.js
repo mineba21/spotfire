@@ -169,6 +169,43 @@ function _scheduleAutoApply(delay = 350) {
   _autoApplyTimer = setTimeout(fetchReportData, delay);
 }
 
+/**
+ * localStorage 의 공유 필터를 사이드바 select 에 복원한다.
+ * 옵션 목록에 없는 값은 무시 (다른 페이지 전용일 수 있음).
+ * 한 필드의 모든 저장값이 옵션에 없으면 ALL 로 graceful fallback.
+ */
+function applySharedFiltersToSelects() {
+  if (!window.SF_SHARED) return;
+  const shared = SF_SHARED.load();
+
+  FILTER_ORDER.forEach((f) => {
+    if (!SF_SHARED.FIELDS.includes(f.field)) return;
+    const values = shared[f.field];
+    if (!values || !values.length) return;
+
+    const el = document.getElementById(f.id);
+    if (!el) return;
+
+    let matched = 0;
+    Array.from(el.options).forEach((o) => {
+      if (o.value === ALL_VALUE) { o.selected = false; return; }
+      if (values.includes(o.value)) { o.selected = true; matched++; }
+      else                          { o.selected = false; }
+    });
+
+    if (matched === 0) {
+      const allOpt = Array.from(el.options).find((o) => o.value === ALL_VALUE);
+      if (allOpt) allOpt.selected = true;
+    }
+  });
+}
+
+/** 공유 필드 한정 — localStorage 에 현재 선택 상태 저장. */
+function persistSharedFilters() {
+  if (!window.SF_SHARED) return;
+  SF_SHARED.save(collectFiltersAsDict());
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 // 3. 초기화
@@ -182,6 +219,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 페이지 초기 로딩 시 사이드바 param_type 옵션에 레이블 적용
   _applyParamTypeLabels(document.getElementById("filterParamType"));
+
+  applySharedFiltersToSelects();   // 서버 렌더된 옵션 위에 공유 상태 덮어쓰기
 
   fetchReportData();
 
@@ -200,9 +239,15 @@ document.addEventListener("DOMContentLoaded", () => {
   on("resetFilterBtn",    "click",  resetFilters);
   // y_field 는 cnt 고정 (인터락 페이지는 count 만 사용)
 
-  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신
+  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신 + 공유 필드 persist
   FILTER_ORDER.forEach((f, idx) => {
-    on(f.id, "change", () => { refreshFilterOptions(idx); _scheduleAutoApply(); });
+    on(f.id, "change", () => {
+      refreshFilterOptions(idx);
+      _scheduleAutoApply();
+      if (window.SF_SHARED && SF_SHARED.FIELDS.includes(f.field)) {
+        persistSharedFilters();
+      }
+    });
   });
 
   ["rankM", "rankW", "rankD"].forEach((id) => {
@@ -430,6 +475,9 @@ function resetFilters() {
   document.getElementById("rankW").value        = 3;
   document.getElementById("rankD").value        = 7;
   // y_field 고정값 사용 — select 없음
+
+  // 공유 필터 저장소도 초기화
+  if (window.SF_SHARED) SF_SHARED.clear();
 
   fetchReportData();
 }

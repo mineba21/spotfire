@@ -63,7 +63,7 @@ const COLORS = [
 const MAX_RENDER_ROWS = 500;
 
 const FILTER_ORDER = [
-  { id: "filterArea",     dataKey: "areas",      field: "area"      },
+  { id: "filterLine",     dataKey: "lines",      field: "line"      },
   { id: "filterSdwtProd", dataKey: "sdwt_prods", field: "sdwt_prod" },
   { id: "filterEqpModel", dataKey: "eqp_models", field: "eqp_model" },
   { id: "filterEqpId",    dataKey: "eqp_ids",    field: "eqp_id"    },
@@ -154,17 +154,17 @@ const COL_LABELS = {
   end_time:     "End",
   yyyymmdd:     "Date",
   state:        "State",
-  area:         "Area",
+  line:         "Line",
 };
 
 /**
  * Top Show 그룹화 기준 컬럼 목록
- * stoploss의 eqp_loss_tpm 테이블 컬럼 기준 (loss_time 집계 포함)
+ * stoploss의 report_stoploss 테이블 컬럼 기준 (line/sdwt_prod/eqp_model)
  */
 const TOP_GROUP_OPTIONS = [
-  { value: "area",               label: "Line"              },
-  { value: "area,sdwt_prod",     label: "Line + 분임조"      },
-  { value: "area,eqp_model",     label: "Line + EQP Model"  },
+  { value: "line",               label: "Line"              },
+  { value: "line,sdwt_prod",     label: "Line + 분임조"      },
+  { value: "line,eqp_model",     label: "Line + EQP Model"  },
   { value: "eqp_model",          label: "EQP Model"         },
   { value: "sdwt_prod",          label: "분임조"             },
 ];
@@ -181,7 +181,7 @@ const RATIO_GROUP_OPTIONS = [
   { value: "state",     label: "State (원인)"   },
   { value: "eqp_id",    label: "EQP ID"          },
   { value: "eqp_model", label: "EQP Model"       },
-  { value: "area",      label: "Area (라인)"     },
+  { value: "line",      label: "Line"            },
   { value: "sdwt_prod", label: "SDWT Prod (분임조)" },
   // TODO: param_type / param_name — interlock_raw join 구현 후 활성화
 ];
@@ -215,7 +215,7 @@ const state = {
   reportColumns: [],
   /** @type {object[]} */
   ratioRows: [],
-  /** @type {string} — ratio 집계 기준 (state / eqp_id / eqp_model / area / sdwt_prod) */
+  /** @type {string} — ratio 집계 기준 (state / eqp_id / eqp_model / line / sdwt_prod) */
   ratioGroupBy: "state",
   /** @type {"raw" | "top" | "ratio"} */
   detailMode: "raw",
@@ -240,6 +240,43 @@ function _scheduleAutoApply(delay = 350) {
   _autoApplyTimer = setTimeout(fetchReportData, delay);
 }
 
+/**
+ * localStorage 의 공유 필터를 사이드바 select 에 복원한다.
+ * 옵션 목록에 없는 값은 무시 (다른 페이지 전용일 수 있음).
+ * 한 필드의 모든 저장값이 옵션에 없으면 ALL 로 graceful fallback.
+ */
+function applySharedFiltersToSelects() {
+  if (!window.SF_SHARED) return;
+  const shared = SF_SHARED.load();
+
+  FILTER_ORDER.forEach((f) => {
+    if (!SF_SHARED.FIELDS.includes(f.field)) return;
+    const values = shared[f.field];
+    if (!values || !values.length) return;
+
+    const el = document.getElementById(f.id);
+    if (!el) return;
+
+    let matched = 0;
+    Array.from(el.options).forEach((o) => {
+      if (o.value === ALL_VALUE) { o.selected = false; return; }
+      if (values.includes(o.value)) { o.selected = true; matched++; }
+      else                          { o.selected = false; }
+    });
+
+    if (matched === 0) {
+      const allOpt = Array.from(el.options).find((o) => o.value === ALL_VALUE);
+      if (allOpt) allOpt.selected = true;
+    }
+  });
+}
+
+/** 공유 필드 한정 — localStorage 에 현재 선택 상태 저장. */
+function persistSharedFilters() {
+  if (!window.SF_SHARED) return;
+  SF_SHARED.save(collectFiltersAsDict());
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 // 3. 초기화
@@ -250,6 +287,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   _initTopGroupSelect();
   _initRatioGroupSelect();
+
+  applySharedFiltersToSelects();   // 서버 렌더된 옵션 위에 공유 상태 덮어쓰기
 
   fetchReportData();
 
@@ -274,9 +313,15 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => setYMode(btn.dataset.mode));
   });
 
-  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신
+  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신 + 공유 필드 persist
   FILTER_ORDER.forEach((f, idx) => {
-    on(f.id, "change", () => { refreshFilterOptions(idx); _scheduleAutoApply(); });
+    on(f.id, "change", () => {
+      refreshFilterOptions(idx);
+      _scheduleAutoApply();
+      if (window.SF_SHARED && SF_SHARED.FIELDS.includes(f.field)) {
+        persistSharedFilters();
+      }
+    });
   });
 
   ["rankM", "rankW", "rankD"].forEach((id) => {
@@ -333,7 +378,7 @@ function _initTopGroupSelect() {
     select.appendChild(el);
   });
 
-  select.value = "area";
+  select.value = "line";
 
   select.addEventListener("change", renderDetailPanel);
   if (topNEl) topNEl.addEventListener("change", renderDetailPanel);
@@ -388,7 +433,7 @@ function collectFilters() {
     selected.forEach((v) => params.append(paramName, v));
   }
  
-  addMultiSelect("filterArea",     "area");
+  addMultiSelect("filterLine",     "line");
   addMultiSelect("filterSdwtProd", "sdwt_prod");
   addMultiSelect("filterEqpModel", "eqp_model");
   addMultiSelect("filterEqpId",    "eqp_id");
@@ -414,7 +459,7 @@ function collectFiltersAsDict() {
     result[fieldName] = selected;
   }
  
-  addMultiSelect("filterArea",     "area");
+  addMultiSelect("filterLine",     "line");
   addMultiSelect("filterSdwtProd", "sdwt_prod");
   addMultiSelect("filterEqpModel", "eqp_model");
   addMultiSelect("filterEqpId",    "eqp_id");
@@ -504,7 +549,7 @@ function _rebuildSelect(selectId, newValues, fieldName) {
 }
 
 function resetFilters() {
-  ["filterArea", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterPrcGroup"]
+  ["filterLine", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterPrcGroup"]
     .forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -518,6 +563,9 @@ function resetFilters() {
 
   // y_mode 리셋
   setYMode("min");
+
+  // 공유 필터 저장소도 초기화
+  if (window.SF_SHARED) SF_SHARED.clear();
 
   fetchReportData();
 }
@@ -937,7 +985,7 @@ function renderTopPanel() {
     return;
   }
 
-  const groupColStr = document.getElementById("topGroupSelect").value || "area";
+  const groupColStr = document.getElementById("topGroupSelect").value || "line";
   const groupCols   = groupColStr.split(",").map((c) => c.trim()).filter(Boolean);
   const topN        = Math.max(1, parseInt(document.getElementById("topNInput").value, 10) || 10);
   const yField      = document.getElementById("yFieldSelect")?.value || "stoploss";

@@ -26,15 +26,35 @@ TABLE_RAW    = os.environ.get("TABLE_RAW",    "interlock_raw")
 # TABLE_MAINTENANCE = os.environ.get("TABLE_MAINTENANCE", "maintenance_record")
 
 
+# ─── Line 통합 치환 매핑 ────────────────────────────────────────────
+# DB line 값이 key 로 startswith 매칭되면 value 로 치환한다.
+# 매핑에 없는 line 은 fallback 으로 앞 2자리 prefix 사용.
+#
+# 사용처: LinePrefixCharField.from_db_value (모델 단계)
+#         filter_service.build_filter_q   (필터 → DB 역매핑 OR 묶기)
+#         views._get_distinct / _filtered_distinct (사이드바 옵션 dedup)
+#
+# 빈 dict 일 때는 기존 동작 (prefix [:2]) 과 동일.
+LINE_REMAP = {
+    # TODO: 운영 환경의 실제 매핑 채워넣기
+    # 예) "L1A": "L1", "L1B": "L1", "L2A": "L2",
+}
+
+
 class LinePrefixCharField(models.CharField):
     """
-    DB에서 line 값을 읽어올 때 앞 2자리만 앱에 노출한다.
-    예) "AB1234" -> "AB", "CD_LINE_01" -> "CD"
+    DB에서 line 값을 읽어올 때 앱에 노출되는 값을 결정한다.
+      1) LINE_REMAP 에 startswith 매칭되면 매핑된 dst 사용
+      2) 매칭 안 되면 앞 2자리 prefix
     """
     def from_db_value(self, value, expression, connection):
         if value is None:
             return value
-        return str(value)[:2]
+        v = str(value)
+        for src, dst in LINE_REMAP.items():
+            if v.startswith(src):
+                return dst
+        return v[:2]
 
 
 # ─────────────────────────────────────────────────────────────────
