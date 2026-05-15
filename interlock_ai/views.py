@@ -19,8 +19,10 @@ from django.views.decorators.http import require_GET, require_POST
 from interlock_ai.models import SpotfireReport, SpotfireRaw
 from interlock_ai.services.filter_service import parse_sidebar_filters, build_filter_q
 from interlock_ai.services.chart_service  import get_chart_data, parse_rank_limits
-from interlock_ai.services.detail_service import get_raw_detail
+from interlock_ai.services.detail_service import get_raw_detail, iter_raw_detail_export, RAW_COLUMNS
 from interlock_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
+
+from config.excel_utils import xlsx_response
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,43 @@ def api_click_detail(request):
             "context": {"flag": flag, "yyyy": yyyy, "flagdates": flagdates},
         }
     })
+
+
+# ─────────────────────────────────────────────────────────────────
+# API: click-detail-export  (Excel 다운로드 — MAX_RAW_ROWS 제한 없음)
+# ─────────────────────────────────────────────────────────────────
+@require_GET
+def api_click_detail_export(request):
+    """
+    Bar 클릭 → Raw Data 를 .xlsx 로 다운로드.
+
+    click-detail 과 같은 파라미터를 받지만 MAX_RAW_ROWS 제한 없이 전체 행을 반환한다.
+    openpyxl write_only + queryset.iterator() 로 메모리 효율적 스트리밍.
+    """
+    flag      = request.GET.get("flag", "").strip().upper()
+    yyyy      = request.GET.get("yyyy", "").strip()
+    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
+
+    if not flag or not yyyy or not flagdates:
+        return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
+    if flag not in VALID_FLAGS:
+        return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
+
+    filters  = parse_sidebar_filters(request.GET)
+    rows_it  = iter_raw_detail_export(flag, yyyy, flagdates, filters)
+
+    # 파일명: rawdata_<flag><flagdates>_YYYYMMDD_HHMM.xlsx
+    import datetime as _dt
+    bar_label = f"{flag}{'-'.join(fd.replace('/', '') for fd in flagdates)}"
+    ts        = _dt.datetime.now().strftime("%Y%m%d_%H%M")
+    filename  = f"rawdata_{bar_label}_{ts}.xlsx"
+
+    logger.info("[ClickDetailExport] flag=%s yyyy=%s flagdates=%s filters=%s",
+                flag, yyyy, flagdates, filters)
+
+    return xlsx_response(
+        rows_it, RAW_COLUMNS, sheet_name="RawData", filename=filename,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────

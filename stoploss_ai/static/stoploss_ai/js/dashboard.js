@@ -62,6 +62,14 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+const FILTER_ORDER = [
+  { id: "filterArea",     dataKey: "areas",      field: "area"      },
+  { id: "filterSdwtProd", dataKey: "sdwt_prods", field: "sdwt_prod" },
+  { id: "filterEqpModel", dataKey: "eqp_models", field: "eqp_model" },
+  { id: "filterEqpId",    dataKey: "eqp_ids",    field: "eqp_id"    },
+  { id: "filterPrcGroup", dataKey: "prc_groups", field: "prc_group" },
+];
+
 // ── 테이블 정렬 상태 (테이블 ID → { col, dir }) ──────────────────
 const _sortState = {};
 
@@ -214,11 +222,22 @@ const state = {
   /** @type {"min" | "pct"} — 기본값 % */
   yMode: "pct",
   copilot: { open: false },
+  topRawRows:    [],
+  topRawColumns: [],
+  topRawBadge:   "",
+  rawPage:       1,
+  rawPageSize:   25,
 };
 
 /** 하위 호환: 단일 bar 참조가 필요한 코드용 */
 function _firstSelectedBar() {
   return state.selectedBars[0] || null;
+}
+
+let _autoApplyTimer = null;
+function _scheduleAutoApply(delay = 350) {
+  clearTimeout(_autoApplyTimer);
+  _autoApplyTimer = setTimeout(fetchReportData, delay);
 }
 
 
@@ -255,9 +274,14 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => setYMode(btn.dataset.mode));
   });
 
-  // 필터 select 변경 시 옵션 동적 갱신
-  ["filterArea", "filterSdwtProd", "filterEqpModel", "filterEqpId", "filterPrcGroup"]
-    .forEach((id) => on(id, "change", refreshFilterOptions));
+  // 필터 select 변경 시 cascading 갱신 + 차트 자동 갱신
+  FILTER_ORDER.forEach((f, idx) => {
+    on(f.id, "change", () => { refreshFilterOptions(idx); _scheduleAutoApply(); });
+  });
+
+  ["rankM", "rankW", "rankD"].forEach((id) => {
+    on(id, "change", () => _scheduleAutoApply());
+  });
 
   document.querySelectorAll('input[name="detailMode"]').forEach((radio) => {
     radio.addEventListener("change", onDetailModeChange);
@@ -272,6 +296,7 @@ document.addEventListener("DOMContentLoaded", () => {
   on("copilotCloseBtn",    "click",  () => toggleCopilot(false));
   on("chartCaptureBtn",    "click",  captureTopChart);
   on("rawExcelBtn",        "click",  downloadRawExcel);
+  on("topRawExcelBtn",     "click",  downloadTopRawExcel);
   on("aiSendBtn",          "click",  sendAiQuestion);
   on("aiInput",            "keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAiQuestion(); }
@@ -411,16 +436,29 @@ function setYMode(mode) {
 }
 
 /**
- * 현재 선택된 필터 값을 백엔드에 보내 각 select의 옵션을 갱신한다.
+ * 사이드바 필터 옵션 동적 갱신 (top-down cascading).
+ *
+ * @param {number} changedIdx  변경된 필터의 FILTER_ORDER 인덱스.
+ *   changedIdx 보다 아래 필터만 재구성. -1 이면 전체 재구성.
  */
-async function refreshFilterOptions() {
-  const params  = new URLSearchParams();
-  const filters = collectFiltersAsDict();
+async function refreshFilterOptions(changedIdx = -1) {
+  const allSelected = collectFiltersAsDict();
 
-  for (const [field, values] of Object.entries(filters)) {
-    for (const v of values) {
-      params.append(field, v);
-    }
+  let constraints;
+  if (changedIdx >= 0) {
+    const allowedFields = new Set(
+      FILTER_ORDER.slice(0, changedIdx + 1).map((f) => f.field)
+    );
+    constraints = Object.fromEntries(
+      Object.entries(allSelected).filter(([k]) => allowedFields.has(k))
+    );
+  } else {
+    constraints = allSelected;
+  }
+
+  const params = new URLSearchParams();
+  for (const [field, values] of Object.entries(constraints)) {
+    for (const v of values) params.append(field, v);
   }
 
   let data;
@@ -434,11 +472,11 @@ async function refreshFilterOptions() {
     return;
   }
 
-  _rebuildSelect("filterArea",      data.areas,      "area");
-  _rebuildSelect("filterSdwtProd",  data.sdwt_prods, "sdwt_prod");
-  _rebuildSelect("filterEqpModel",  data.eqp_models, "eqp_model");
-  _rebuildSelect("filterEqpId",     data.eqp_ids,    "eqp_id");
-  _rebuildSelect("filterPrcGroup",  data.prc_groups, "prc_group");
+  FILTER_ORDER.forEach((f, idx) => {
+    if (changedIdx < 0 || idx > changedIdx) {
+      _rebuildSelect(f.id, data[f.dataKey] || [], f.field);
+    }
+  });
 }
 
 function _rebuildSelect(selectId, newValues, fieldName) {
@@ -782,13 +820,16 @@ function onDetailModeChange(e) {
 function renderRawTable() {
   const thead   = document.getElementById("rawTableHead");
   const tbody   = document.getElementById("rawTableBody");
+  const paginEl = document.getElementById("rawPagination");
   const emptyEl = document.getElementById("rawTableEmpty");
 
   thead.innerHTML = "";
   tbody.innerHTML = "";
+  state.rawPage   = 1;
 
   if (!state.rawColumns.length || !state.rawRows.length) {
     if (emptyEl) emptyEl.style.display = "block";
+    if (paginEl) paginEl.innerHTML = "";
     return;
   }
   if (emptyEl) emptyEl.style.display = "none";
@@ -804,10 +845,14 @@ function renderRawTable() {
   });
   thead.appendChild(headerRow);
 
-  function _doRenderRawBody(rows) {
+  let _currentRows = state.rawRows;
+
+  function _renderPageBody() {
+    const start    = (state.rawPage - 1) * state.rawPageSize;
+    const pageRows = _currentRows.slice(start, start + state.rawPageSize);
     tbody.innerHTML = "";
-    const fragment = document.createDocumentFragment();
-    rows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+    const fragment  = document.createDocumentFragment();
+    pageRows.forEach((row) => {
       const tr = document.createElement("tr");
       state.rawColumns.forEach((col) => {
         const td  = document.createElement("td");
@@ -825,25 +870,57 @@ function renderRawTable() {
       fragment.appendChild(tr);
     });
     tbody.appendChild(fragment);
+  }
 
-    if (rows.length > MAX_RENDER_ROWS) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan     = state.rawColumns.length;
-      td.className   = "sf-table-truncate-msg";
-      td.textContent = `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${rows.length.toLocaleString()}건)`;
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    }
+  function _renderRawPagination() {
+    if (!paginEl) return;
+    const total      = _currentRows.length;
+    const totalPages = Math.max(1, Math.ceil(total / state.rawPageSize));
+    const from       = total ? (state.rawPage - 1) * state.rawPageSize + 1 : 0;
+    const to         = Math.min(state.rawPage * state.rawPageSize, total);
+
+    paginEl.innerHTML = `
+      <div class="sf-pagination">
+        <select class="sf-select-sm sf-pagination__size" id="rawPageSizeSelect">
+          <option value="25" ${state.rawPageSize === 25 ? "selected" : ""}>25 / 페이지</option>
+          <option value="50" ${state.rawPageSize === 50 ? "selected" : ""}>50 / 페이지</option>
+        </select>
+        <span class="sf-pagination__info">${from.toLocaleString()}–${to.toLocaleString()} / ${total.toLocaleString()}건</span>
+        <div class="sf-pagination__nav">
+          <button class="sf-pagination__btn" id="rawPrevBtn" ${state.rawPage <= 1 ? "disabled" : ""}>&#8249;</button>
+          <span class="sf-pagination__page">${state.rawPage} / ${totalPages}</span>
+          <button class="sf-pagination__btn" id="rawNextBtn" ${state.rawPage >= totalPages ? "disabled" : ""}>&#8250;</button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("rawPageSizeSelect")?.addEventListener("change", (e) => {
+      state.rawPageSize = Number(e.target.value);
+      state.rawPage     = 1;
+      _renderPageBody();
+      _renderRawPagination();
+    });
+    document.getElementById("rawPrevBtn")?.addEventListener("click", () => {
+      if (state.rawPage > 1) { state.rawPage--; _renderPageBody(); _renderRawPagination(); }
+    });
+    document.getElementById("rawNextBtn")?.addEventListener("click", () => {
+      if (state.rawPage < totalPages) { state.rawPage++; _renderPageBody(); _renderRawPagination(); }
+    });
+  }
+
+  function _doRenderRawBody(sortedRows) {
+    _currentRows  = sortedRows;
+    state.rawPage = 1;
+    _renderPageBody();
+    _renderRawPagination();
   }
 
   _attachSorting(thead, state.rawColumns, "rawTable", () => state.rawRows, _doRenderRawBody);
 
   const ss = _sortState["rawTable"];
-  const initialRows = (ss && ss.col)
-    ? _sortRows(state.rawRows, ss.col, ss.dir)
-    : state.rawRows;
-  _doRenderRawBody(initialRows);
+  if (ss && ss.col) _currentRows = _sortRows(state.rawRows, ss.col, ss.dir);
+  _renderPageBody();
+  _renderRawPagination();
 }
 
 // ── Top Show (report_stoploss 기반 그룹 집계) ────────────────
@@ -1034,6 +1111,10 @@ function _renderTopRaw(rows, badgeText, columns) {
   countEl.textContent = `${rows.length.toLocaleString()}건`;
   panel.style.display = "block";
 
+  state.topRawRows    = rows;
+  state.topRawColumns = columns || (rows.length ? Object.keys(rows[0]) : []);
+  state.topRawBadge   = badgeText;
+
   thead.innerHTML = "";
   const cols      = columns || (rows.length ? Object.keys(rows[0]) : []);
   const headerRow = document.createElement("tr");
@@ -1095,6 +1176,9 @@ function _renderTopRaw(rows, badgeText, columns) {
 function closeTopRaw() {
   const panel = document.getElementById("topRawPanel");
   if (panel) panel.style.display = "none";
+  state.topRawRows    = [];
+  state.topRawColumns = [];
+  state.topRawBadge   = "";
 }
 
 // ── Ratio Analysis ─────────────────────────────────────────────
@@ -1507,78 +1591,105 @@ async function captureTopChart() {
 // 14. Raw Data Excel 다운로드
 // ═══════════════════════════════════════════════════════════════
 
-function downloadRawExcel() {
-  if (!state.rawRows || !state.rawRows.length) {
+function _downloadAsExcel(rows, columns, filenamePrefix, sheetName, extraLabel) {
+  if (!rows || !rows.length) {
     showToast("다운로드할 데이터가 없습니다.");
     return;
   }
-
   if (typeof XLSX === "undefined") {
     showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.");
     return;
   }
 
-  const btn      = document.getElementById("rawExcelBtn");
-  const origHTML = btn ? btn.innerHTML : "";
+  const cols = (columns && columns.length) ? columns : Object.keys(rows[0]);
+
+  const sheetData = [
+    cols,
+    ...rows.map((row) => cols.map((c) => row[c] ?? "")),
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  ws["!cols"] = cols.map((col) => {
+    const maxLen = Math.max(
+      col.length,
+      ...rows.slice(0, 200).map((r) => String(r[col] ?? "").length)
+    );
+    return { wch: Math.min(maxLen + 2, 40) };
+  });
+
+  cols.forEach((_, ci) => {
+    const cellAddr = XLSX.utils.encode_cell({ r: 0, c: ci });
+    if (!ws[cellAddr]) return;
+    ws[cellAddr].s = {
+      font:      { bold: true, color: { rgb: "FFFFFF" } },
+      fill:      { fgColor: { rgb: "6366F1" } },
+      alignment: { horizontal: "center" },
+    };
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || "Sheet1");
+
+  const bars = state.selectedBars || [];
+  let barLabel = "all";
+  if (bars.length === 1) {
+    barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
+  } else if (bars.length > 1) {
+    const flag  = bars[0].flag;
+    const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
+    barLabel = `${flag}${dates}`;
+  }
+
+  const extra = extraLabel ? `_${extraLabel.replace(/[^\w가-힣]+/g, "")}` : "";
+  const now = new Date();
+  const ts  = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
+  const fileName = `${filenamePrefix}_${barLabel}${extra}_${ts}.xlsx`;
+
+  XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
+  showToast(`📥 ${fileName} 다운로드 완료!`);
+}
+
+/**
+ * 서버의 click-detail-export endpoint 를 호출해 .xlsx 다운로드.
+ *
+ * 기존엔 state.rawRows (UI 가 받은 MAX_RAW_ROWS cap 적용된 데이터) 를 JS XLSX 로
+ * 변환했으나, cap 이 복구되면서 화면엔 5000건만 표시되더라도 Excel 은 전체
+ * 데이터가 필요. 서버에서 openpyxl 로 limit 없이 .xlsx 를 직접 생성/스트림한다.
+ */
+function downloadRawExcel() {
+  const bars = state.selectedBars || [];
+  if (!bars.length) {
+    showToast("bar 를 먼저 클릭하세요.");
+    return;
+  }
+
+  const params = collectFilters();
+  params.append("flag", bars[0].flag);
+  params.append("yyyy", bars[0].yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
+
+  // Content-Disposition: attachment 덕분에 navigation 없이 다운로드 트리거됨
+  window.location.href = `${URLS.clickDetailExport}?${params.toString()}`;
+  showToast("📥 Excel 생성 중…");
+}
+
+function downloadTopRawExcel() {
+  const btn  = document.getElementById("topRawExcelBtn");
+  const orig = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.innerHTML = "저장 중…"; }
-
   try {
-    const columns = state.rawColumns.length
-      ? state.rawColumns
-      : Object.keys(state.rawRows[0]);
-
-    const sheetData = [
-      columns,
-      ...state.rawRows.map((row) =>
-        columns.map((col) => row[col] ?? "")
-      ),
-    ];
-
-    const ws = XLSX.utils.aoa_to_sheet(sheetData);
-
-    ws["!cols"] = columns.map((col) => {
-      const maxLen = Math.max(
-        col.length,
-        ...state.rawRows.slice(0, 200).map((r) => String(r[col] ?? "").length)
-      );
-      return { wch: Math.min(maxLen + 2, 40) };
-    });
-
-    columns.forEach((_, ci) => {
-      const cellAddr = XLSX.utils.encode_cell({ r: 0, c: ci });
-      if (!ws[cellAddr]) return;
-      ws[cellAddr].s = {
-        font:      { bold: true, color: { rgb: "FFFFFF" } },
-        fill:      { fgColor: { rgb: "6366F1" } },
-        alignment: { horizontal: "center" },
-      };
-    });
-
-    const wb        = XLSX.utils.book_new();
-    const sheetName = "RawData";
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-
-    const bars     = state.selectedBars || [];
-    let barLabel   = "all";
-    if (bars.length === 1) {
-      barLabel = `${bars[0].flag}${bars[0].flagdate.replace("/", "")}`;
-    } else if (bars.length > 1) {
-      const flag  = bars[0].flag;
-      const dates = bars.map((b) => b.flagdate.replace("/", "")).join("-");
-      barLabel = `${flag}${dates}`;
-    }
-    const now      = new Date();
-    const ts       = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}`;
-    const fileName = `stoploss_rawdata_${barLabel}_${ts}.xlsx`;
-
-    XLSX.writeFile(wb, fileName, { bookType: "xlsx", cellStyles: true });
-
-    showToast(`📥 ${fileName} 다운로드 완료!`);
-
+    _downloadAsExcel(
+      state.topRawRows,
+      state.topRawColumns,
+      "stoploss_top_rawdata",
+      "TopRawData",
+      state.topRawBadge,
+    );
   } catch (err) {
-    console.error("[downloadRawExcel]", err);
+    console.error("[downloadTopRawExcel]", err);
     showToast(`Excel 저장 실패: ${err.message}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
   }
 }

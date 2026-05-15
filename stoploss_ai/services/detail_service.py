@@ -185,23 +185,66 @@ def get_eqp_loss_detail(flag: str, yyyy: str, flagdates, eqp_ids: list) -> list:
         .order_by("yyyymmdd", "act_time")[:MAX_RAW_ROWS]
     )
 
-    rows = []
-    for row in qs:
-        rows.append({
-            "yyyymmdd":      row["yyyymmdd"],
-            "act_time":      row["act_time"],
-            "line":          row["line"],
-            "sdwt_prod":     row["sdwt_prod"],
-            "eqp_id":        row["eqp_id"],
-            "eqp_model":     row["eqp_model"],
-            "param_type":    row["param_type"],
-            "param_name":    row["param_name"],
-            "loss_time_min": row["loss_time"],
-            "lot_id":        row["lot_id"],
-        })
+    rows = [_transform_eqp_loss_row(row) for row in qs]
 
     logger.info(
         "[EqpLossDetail] flag=%s flagdates=%s eqp_ids=%s → %d건",
         flag, flagdates, eqp_ids, len(rows),
     )
     return rows
+
+
+# ── Export 전용 (limit 없이 iterator 반환) ────────────────────────
+
+def _transform_eqp_loss_row(row: dict) -> dict:
+    """EqpLossTpm row → 출력 컬럼 매핑 (loss_time → loss_time_min)."""
+    return {
+        "yyyymmdd":      row["yyyymmdd"],
+        "act_time":      row["act_time"],
+        "line":          row["line"],
+        "sdwt_prod":     row["sdwt_prod"],
+        "eqp_id":        row["eqp_id"],
+        "eqp_model":     row["eqp_model"],
+        "param_type":    row["param_type"],
+        "param_name":    row["param_name"],
+        "loss_time_min": row["loss_time"],
+        "lot_id":        row["lot_id"],
+    }
+
+
+def iter_loss_event_detail_export(flag: str, yyyy: str, flagdates, filters: dict):
+    """
+    Excel export 용 LOSS EVENT 행 iterator.
+
+    get_loss_event_detail 과 같은 scope (sidebar 필터 + 기간) 이지만 MAX_RAW_ROWS
+    limit 없이 queryset.iterator() 를 반환한다. xlsx_response 의 transform 인자에
+    _transform_eqp_loss_row 를 넘겨 컬럼 매핑.
+    """
+    flagdates = _normalize_flagdates(flagdates)
+    if not flagdates:
+        return iter(())
+
+    q_report = Q(flag=flag, yyyy=yyyy, flagdate__in=flagdates) & build_q(filters)
+    eqp_ids = list(
+        StoplossReport.objects
+        .filter(q_report)
+        .exclude(eqp_id="")
+        .values_list("eqp_id", flat=True)
+        .distinct()
+    )
+    if not eqp_ids:
+        return iter(())
+
+    date_q = _build_selected_date_q(flag, yyyy, flagdates)
+    if date_q is None:
+        return iter(())
+
+    q = date_q & Q(eqp_id__in=eqp_ids)
+    qs = (
+        EqpLossTpm.objects
+        .filter(q)
+        .values(*EQP_LOSS_QUERY_FIELDS)
+        .order_by("yyyymmdd", "act_time")
+    )
+
+    return qs.iterator(chunk_size=1000)

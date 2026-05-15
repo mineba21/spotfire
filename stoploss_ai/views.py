@@ -18,10 +18,13 @@ from stoploss_ai.services.filter_service import parse_filters, build_q
 from stoploss_ai.services.chart_service   import get_chart_data, parse_rank_limits
 from stoploss_ai.services.detail_service  import (
     get_report_detail, get_loss_event_detail, get_eqp_loss_detail,
+    iter_loss_event_detail_export, _transform_eqp_loss_row,
     REPORT_COLUMNS, EQP_LOSS_COLUMNS,
 )
 from stoploss_ai.services.ratio_service import get_ratio_analysis
 from stoploss_ai.services.ai_service      import ask_ai, VALID_PAGE_CONTEXTS
+
+from config.excel_utils import xlsx_response
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +123,42 @@ def api_click_detail(request):
             "ratio_group_by":  group_by,
         },
     })
+
+
+@require_GET
+def api_click_detail_export(request):
+    """
+    Bar 클릭 → Loss Event Data 를 .xlsx 로 다운로드.
+
+    click-detail 과 같은 파라미터를 받지만 MAX_RAW_ROWS 제한 없이 전체 행을 반환한다.
+    openpyxl write_only + queryset.iterator() 로 메모리 효율적 스트리밍.
+    """
+    flag      = request.GET.get("flag", "")
+    yyyy      = request.GET.get("yyyy", "")
+    flagdates = request.GET.getlist("flagdate")
+
+    if not all([flag, yyyy]) or not flagdates or flag not in VALID_FLAGS:
+        return JsonResponse(
+            {"ok": False, "error": "flag, yyyy, flagdate 파라미터가 필요합니다"},
+            status=400,
+        )
+
+    filters  = parse_filters(request.GET)
+    rows_it  = iter_loss_event_detail_export(flag, yyyy, flagdates, filters)
+
+    # 파일명: stoploss_rawdata_<flag><flagdates>_YYYYMMDD_HHMM.xlsx
+    import datetime as _dt
+    bar_label = f"{flag}{'-'.join(fd.replace('/', '') for fd in flagdates)}"
+    ts        = _dt.datetime.now().strftime("%Y%m%d_%H%M")
+    filename  = f"stoploss_rawdata_{bar_label}_{ts}.xlsx"
+
+    logger.info("[ClickDetailExport] flag=%s yyyy=%s flagdates=%s filters=%s",
+                flag, yyyy, flagdates, filters)
+
+    return xlsx_response(
+        rows_it, EQP_LOSS_COLUMNS, sheet_name="RawData",
+        filename=filename, transform=_transform_eqp_loss_row,
+    )
 
 
 @require_GET
