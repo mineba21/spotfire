@@ -2,7 +2,7 @@
 stoploss_ai/views.py
 
 [변경 이력]
-  - line → area 반영
+  - area(DB) ↔ line(앱) 통일 — 모델 필드 line, DB 컬럼 area
   - y_field 허용값에 eng, etc, stepchg, std_time, rd 추가
 """
 import json
@@ -33,7 +33,7 @@ VALID_FLAGS = {"M", "W", "D"}
 
 def index(request):
     filter_options = {
-        "areas":       _get_distinct("area"),
+        "lines":       _get_distinct("line"),
         "sdwt_prods":  _get_distinct("sdwt_prod"),
         "eqp_models":  _get_distinct("eqp_model"),
         "eqp_ids":     _get_distinct("eqp_id"),
@@ -84,7 +84,7 @@ def api_filter_options(request):
         )
 
     return JsonResponse({"ok": True, "data": {
-        "areas":       _filtered_distinct("area"),
+        "lines":       _filtered_distinct("line"),
         "sdwt_prods":  _filtered_distinct("sdwt_prod"),
         "eqp_models":  _filtered_distinct("eqp_model"),
         "eqp_ids":     _filtered_distinct("eqp_id"),
@@ -203,7 +203,7 @@ def api_ask_ai(request):
         return JsonResponse({"ok": False, "error": "question이 필요합니다"}, status=400)
 
     filter_options = {
-        "areas":       _get_distinct("area"),
+        "lines":       _get_distinct("line"),
         "sdwt_prods":  _get_distinct("sdwt_prod"),
         "eqp_models":  _get_distinct("eqp_model"),
         "eqp_ids":     _get_distinct("eqp_id"),

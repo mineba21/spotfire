@@ -2,39 +2,30 @@
 stoploss_ai/services/json_validator.py
 
 [변경 이력]
-  - line → area 반영
+  - line(앱) ↔ area(DB) 매핑 (db_column="area") — 앱에서는 line 으로 통일
+  - EqpLossTpm 제거 → TpmEqpLoss 단일 (tpm_eqp_loss 테이블)
   - ALLOWED_REPORT_FIELDS 에 eng, etc, stepchg, std_time, rd 추가
 """
 from stoploss_ai.models import (
     TABLE_EQP_LOSS,
-    TABLE_EQP_LOSS_TPM,
     TABLE_STOPLOSS_REPORT,
     LOSS_COLUMNS,
 )
 
-ALLOWED_TABLES = frozenset({TABLE_EQP_LOSS, TABLE_EQP_LOSS_TPM, TABLE_STOPLOSS_REPORT})
+ALLOWED_TABLES = frozenset({TABLE_EQP_LOSS, TABLE_STOPLOSS_REPORT})
 
 ALLOWED_EQP_LOSS_FIELDS = frozenset({
     # TpmEqpLoss 실제 컬럼 (tpm_eqp_loss 테이블 기준)
     "yyyymmdd", "eqp_id",
     "start_time", "end_time",
-    "state", "down_comment",
+    "state", "param_type", "param_name",
     "pk",
-    "yyyymmdd_range",
-})
-
-ALLOWED_EQP_LOSS_TPM_FIELDS = frozenset({
-    "yyyymmdd", "act_time", "line", "sdwt_prod", "eqp_id", "unit_id",
-    "eqp_model", "param_type", "param_name", "loss_time", "lot_id",
-    "pk",
-    "act_time_range",
-    "yyyy_filter",
     "yyyymmdd_range",
 })
 
 ALLOWED_REPORT_FIELDS = frozenset({
     "yyyy", "flag", "flagdate",
-    "area", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
+    "line", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
     "plan_time",
     "stoploss", "pm", "qual", "bm",
     "eng", "etc", "stepchg", "std_time", "rd",
@@ -56,9 +47,7 @@ def validate_stoploss_query_json(qj: dict) -> tuple:
     if table not in ALLOWED_TABLES:
         return False, f"허용되지 않은 table: '{table}'"
 
-    if table == TABLE_EQP_LOSS_TPM:
-        allowed_fields = ALLOWED_EQP_LOSS_TPM_FIELDS
-    elif table == TABLE_EQP_LOSS:
+    if table == TABLE_EQP_LOSS:
         allowed_fields = ALLOWED_EQP_LOSS_FIELDS
     else:
         allowed_fields = ALLOWED_REPORT_FIELDS

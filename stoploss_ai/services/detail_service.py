@@ -2,15 +2,20 @@
 stoploss_ai/services/detail_service.py
 
 역할:
-  get_report_detail     : bar 클릭 → report_stoploss 행 반환 (Top Show 집계용)
-  get_loss_event_detail : bar 클릭 → report_stoploss 로 eqp_id 선별 후 eqp_loss_tpm 행 반환
-  get_eqp_loss_detail   : Top Show rank bar 클릭 → eqp_loss_tpm 행 반환
+  get_report_detail              : bar 클릭 → report_stoploss 행 반환 (Top Show 집계용)
+  get_loss_event_detail          : bar 클릭 → report_stoploss 로 eqp_id 선별 후 tpm_eqp_loss 행 반환
+  get_eqp_loss_detail            : Top Show rank bar 클릭 → tpm_eqp_loss 행 반환
+  iter_loss_event_detail_export  : Excel export 용 — limit 없이 queryset.iterator() 반환
+
+loss_time_min 은 DB 컬럼이 아니다. start_time/end_time 차이로 Python 계산된 derived 필드.
 """
+import datetime
 import logging
+from typing import Optional
 
 from django.db.models import Q
 
-from stoploss_ai.models import EqpLossTpm, StoplossReport
+from stoploss_ai.models import TpmEqpLoss, StoplossReport
 from stoploss_ai.services.filter_service import build_q
 from interlock_ai.services.detail_service import get_date_range
 
@@ -37,23 +42,23 @@ RAW_COLUMNS = REPORT_COLUMNS
 # REPORT_COLUMNS 의 모든 항목이 여기에 포함되어야 한다.
 REPORT_DETAIL_FIELDS = [
     "flag", "flagdate",
-    "area", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
+    "line", "sdwt_prod", "eqp_id", "eqp_model", "prc_group",
     "plan_time",
     "stoploss", "pm", "qual", "bm", "eng", "etc", "stepchg", "std_time", "rd",
     "rank",
 ]
 
-# LOSS EVENT DATA / Top Show rank bar 클릭 → eqp_loss_tpm 컬럼
+# LOSS EVENT DATA / Top Show rank bar 클릭 → tpm_eqp_loss 컬럼
+# COLUMNS: 응답에 포함되는 dict 키 (출력 순서) — loss_time_min 은 derived (DB 컬럼 아님)
 EQP_LOSS_COLUMNS = [
-    "yyyymmdd", "act_time", "line", "sdwt_prod",
-    "eqp_id", "eqp_model", "param_type", "param_name",
-    "loss_time_min", "lot_id",
+    "yyyymmdd", "eqp_id", "start_time", "end_time",
+    "state", "param_type", "param_name", "loss_time_min",
 ]
 
+# QUERY_FIELDS: .values() 에 들어가는 실제 DB 컬럼 — loss_time_min 은 제외
 EQP_LOSS_QUERY_FIELDS = [
-    "yyyymmdd", "act_time", "line", "sdwt_prod",
-    "eqp_id", "eqp_model", "param_type", "param_name",
-    "loss_time", "lot_id",
+    "yyyymmdd", "eqp_id", "start_time", "end_time",
+    "state", "param_type", "param_name",
 ]
 
 MAX_RAW_ROWS = 5000
@@ -68,7 +73,7 @@ def _normalize_flagdates(flagdates) -> list:
 
 
 def _eqp_loss_ymd_has_hyphen() -> bool:
-    sample = EqpLossTpm.objects.values_list("yyyymmdd", flat=True).first()
+    sample = TpmEqpLoss.objects.values_list("yyyymmdd", flat=True).first()
     return "-" in str(sample) if sample else False
 
 
@@ -100,6 +105,40 @@ def _build_selected_date_q(flag: str, yyyy: str, flagdates: list):
     return date_q if has_any else None
 
 
+# ── loss_time_min derived 계산 ─────────────────────────────────────
+# tpm_eqp_loss 에는 loss_time 컬럼이 없어서 start_time / end_time 차이로 계산한다.
+# 이 함수들은 ratio_service.py 에서도 사용된다.
+
+_DATETIME_FMTS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y%m%d%H%M%S",
+    "%Y%m%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+]
+
+
+def _parse_dt(s: str) -> Optional[datetime.datetime]:
+    if not s:
+        return None
+    s = str(s).strip()
+    for fmt in _DATETIME_FMTS:
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _calc_loss_min(start_str, end_str) -> float:
+    start = _parse_dt(start_str)
+    end   = _parse_dt(end_str)
+    if start is None or end is None:
+        return 0.0
+    diff = (end - start).total_seconds() / 60
+    return max(0.0, round(diff, 1))
+
+
 # ── 공개 함수 ─────────────────────────────────────────────────────
 
 def get_report_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
@@ -107,8 +146,8 @@ def get_report_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
     bar 클릭 시 report_stoploss 에서 해당 (flag, yyyy, flagdate) 행을 반환한다.
 
     - flagdates: 단일 str 또는 list[str] (같은 flag 내 멀티 선택 지원)
-    - Top Show 패널: area / sdwt_prod / eqp_model 등 그룹 컬럼 + 손실값으로 집계
-    - LOSS EVENT DATA 는 get_loss_event_detail() 에서 eqp_loss_tpm 기준으로 별도 조회
+    - Top Show 패널: line / sdwt_prod / eqp_model 등 그룹 컬럼 + 손실값으로 집계
+    - LOSS EVENT DATA 는 get_loss_event_detail() 에서 tpm_eqp_loss 기준으로 별도 조회
     """
     flagdates = _normalize_flagdates(flagdates)
     if not flagdates:
@@ -131,9 +170,9 @@ def get_report_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
 
 def get_loss_event_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
     """
-    bar 클릭 시 LOSS EVENT DATA 에 표시할 eqp_loss_tpm 행을 반환한다.
+    bar 클릭 시 LOSS EVENT DATA 에 표시할 tpm_eqp_loss 행을 반환한다.
 
-    eqp_loss_tpm 에는 prc_group 등 report 메타가 없으므로, 먼저
+    tpm_eqp_loss 에는 prc_group 등 report 메타가 없으므로, 먼저
     report_stoploss 에 sidebar 필터를 적용해 대상 eqp_id 를 선별한다.
     """
     flagdates = _normalize_flagdates(flagdates)
@@ -161,10 +200,11 @@ def get_loss_event_detail(flag: str, yyyy: str, flagdates, filters: dict) -> lis
 
 def get_eqp_loss_detail(flag: str, yyyy: str, flagdates, eqp_ids: list) -> list:
     """
-    Top Show rank bar 클릭 시 eqp_loss_tpm 에서 해당 기간 + eqp_id 조건으로 행을 반환한다.
+    Top Show rank bar 클릭 시 tpm_eqp_loss 에서 해당 기간 + eqp_id 조건으로 행을 반환한다.
 
     - flagdates: 단일 str 또는 list[str]
     - eqp_ids 가 비어있으면 해당 기간 전체를 반환한다.
+    - loss_time_min 은 start_time/end_time 차이로 Python 계산해 dict 에 추가한다.
     """
     flagdates = _normalize_flagdates(flagdates)
     if not flagdates:
@@ -179,10 +219,10 @@ def get_eqp_loss_detail(flag: str, yyyy: str, flagdates, eqp_ids: list) -> list:
         q &= Q(eqp_id__in=eqp_ids)
 
     qs = (
-        EqpLossTpm.objects
+        TpmEqpLoss.objects
         .filter(q)
         .values(*EQP_LOSS_QUERY_FIELDS)
-        .order_by("yyyymmdd", "act_time")[:MAX_RAW_ROWS]
+        .order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS]
     )
 
     rows = [_transform_eqp_loss_row(row) for row in qs]
@@ -197,18 +237,19 @@ def get_eqp_loss_detail(flag: str, yyyy: str, flagdates, eqp_ids: list) -> list:
 # ── Export 전용 (limit 없이 iterator 반환) ────────────────────────
 
 def _transform_eqp_loss_row(row: dict) -> dict:
-    """EqpLossTpm row → 출력 컬럼 매핑 (loss_time → loss_time_min)."""
+    """
+    TpmEqpLoss row → 출력 dict.
+    loss_time_min 은 start_time / end_time 차이로 Python 계산.
+    """
     return {
         "yyyymmdd":      row["yyyymmdd"],
-        "act_time":      row["act_time"],
-        "line":          row["line"],
-        "sdwt_prod":     row["sdwt_prod"],
         "eqp_id":        row["eqp_id"],
-        "eqp_model":     row["eqp_model"],
+        "start_time":    row["start_time"],
+        "end_time":      row["end_time"],
+        "state":         row["state"],
         "param_type":    row["param_type"],
         "param_name":    row["param_name"],
-        "loss_time_min": row["loss_time"],
-        "lot_id":        row["lot_id"],
+        "loss_time_min": _calc_loss_min(row["start_time"], row["end_time"]),
     }
 
 
@@ -218,7 +259,7 @@ def iter_loss_event_detail_export(flag: str, yyyy: str, flagdates, filters: dict
 
     get_loss_event_detail 과 같은 scope (sidebar 필터 + 기간) 이지만 MAX_RAW_ROWS
     limit 없이 queryset.iterator() 를 반환한다. xlsx_response 의 transform 인자에
-    _transform_eqp_loss_row 를 넘겨 컬럼 매핑.
+    _transform_eqp_loss_row 를 넘겨 loss_time_min derived 계산.
     """
     flagdates = _normalize_flagdates(flagdates)
     if not flagdates:
@@ -241,10 +282,10 @@ def iter_loss_event_detail_export(flag: str, yyyy: str, flagdates, filters: dict
 
     q = date_q & Q(eqp_id__in=eqp_ids)
     qs = (
-        EqpLossTpm.objects
+        TpmEqpLoss.objects
         .filter(q)
         .values(*EQP_LOSS_QUERY_FIELDS)
-        .order_by("yyyymmdd", "act_time")
+        .order_by("yyyymmdd", "start_time")
     )
 
     return qs.iterator(chunk_size=1000)

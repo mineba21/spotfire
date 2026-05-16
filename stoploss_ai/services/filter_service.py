@@ -7,16 +7,18 @@ stoploss_ai/services/filter_service.py
 - "ALL" 값이 들어오면 해당 필터를 건너뛴다 (전체 조회)
 
 [변경 이력]
-  - line → area 컬럼명 변경 반영
+  - area(DB 컬럼) ↔ line(앱) 통일 — Django 모델 필드명만 line, DB 컬럼은 area 유지
+    (StoplossReport.line = CharField(..., db_column="area"))
 """
 
 from django.db.models import Q
 
 # ─────────────────────────────────────────────────────────────────
 # sidebar 에서 multi-select 로 넘어오는 필터 필드 목록
+# 순서는 interlock_ai 와 맞춰 페이지간 공유 필터의 명칭/순서를 일관시킨다.
 # ─────────────────────────────────────────────────────────────────
 FILTER_FIELDS = [
-    "area",
+    "line",
     "sdwt_prod",
     "eqp_model",
     "eqp_id",
@@ -32,7 +34,7 @@ def parse_filters(get_params) -> dict:
 
     반환 예시:
         {
-            "area":      ["A1", "A2"],
+            "line":      ["A1", "A2"],
             "sdwt_prod": [],
             "eqp_model": ["MODEL-X"],
             "eqp_id":    [],

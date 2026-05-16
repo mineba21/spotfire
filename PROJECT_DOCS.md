@@ -382,7 +382,7 @@ REPORT_DETAIL_FIELDS = [area, sdwt_prod, eqp_id, eqp_model, prc_group, plan_time
 5. `report_stoploss.stoploss` 레벨별 인덱스 구축 (eqp/model/sdwt/area/total)
 6. `pct_vs_*` 계산 = `loss_time_min / stoploss_합 * 100`
 
-**반환 필드**: `state`, `loss_time_min`, `pct_vs_eqp`, `pct_vs_model`, `pct_vs_sdwt`, `pct_vs_area`, `pct_vs_total`
+**반환 필드**: `state`, `loss_time_min`, `pct_vs_eqp`, `pct_vs_model`, `pct_vs_sdwt`, `pct_vs_line`, `pct_vs_total`
 
 ### 7-5. `json_validator.py`
 
@@ -595,9 +595,9 @@ Django ORM 쿼리
 **변경 내용**:
 - **Grouping Key 변경**: `param_type`/`param_name` → **`tpm_eqp_loss.state`**
 - **Loss 시간 계산**: DB `loss_time` 컬럼 → **`start_time`/`end_time` 차이** (Python 계산)
-- **분모 레벨 변경**: `pct_vs_line` → **`pct_vs_area`**
-- **eqp 메타 연결**: `tpm_eqp_loss.eqp_id` → `report_stoploss`에서 area/model/sdwt 조회
-- **Sidebar 필터 적용**: ratio 집계 시 area/eqp_model/sdwt_prod 필터 반영
+- **분모 레벨**: `pct_vs_line` (앱 필드 line, DB 컬럼은 여전히 `area`)
+- **eqp 메타 연결**: `tpm_eqp_loss.eqp_id` → `report_stoploss`에서 line/model/sdwt 조회
+- **Sidebar 필터 적용**: ratio 집계 시 line/eqp_model/sdwt_prod 필터 반영
 - `ratio_service.py` 전면 재작성
 - `views.py` ratio 활성화 (주석 해제)
 - `dashboard.js` `renderRatioPanel()` 컬럼 업데이트
@@ -611,7 +611,7 @@ Django ORM 쿼리
 | `pct_vs_eqp` | 해당 EQP 합산 stoploss 대비 % |
 | `pct_vs_model` | 해당 기종 합산 stoploss 대비 % |
 | `pct_vs_sdwt` | 해당 분임조 합산 stoploss 대비 % |
-| `pct_vs_area` | 해당 라인 합산 stoploss 대비 % |
+| `pct_vs_line` | 해당 라인 합산 stoploss 대비 % |
 | `pct_vs_total` | 전체 period stoploss 대비 % |
 
 ---
