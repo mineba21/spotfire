@@ -1235,7 +1235,7 @@ function closeTopRaw() {
  * state.ratioRows 를 Ratio Analysis 테이블로 렌더링한다.
  *
  * 컬럼: state, loss_time_min,
- *        pct_vs_eqp, pct_vs_model, pct_vs_sdwt, pct_vs_area, pct_vs_total
+ *        pct_vs_eqp, pct_vs_model, pct_vs_sdwt, pct_vs_line, pct_vs_total
  */
 function renderRatioPanel() {
   const thead   = document.getElementById("ratioTableHead");
@@ -1262,7 +1262,7 @@ function renderRatioPanel() {
     { key: "pct_vs_eqp",   label: "vs EQP %"    },
     { key: "pct_vs_model", label: "vs Model %"  },
     { key: "pct_vs_sdwt",  label: "vs SDWT %"   },
-    { key: "pct_vs_area",  label: "vs Area %"   },
+    { key: "pct_vs_line",  label: "vs Line %"   },
     { key: "pct_vs_total", label: "vs Total %"  },
   ];
 
