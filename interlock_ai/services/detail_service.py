@@ -41,9 +41,6 @@ RAW_COLUMNS = [
     "slot_no",
 ]
 
-# 조회 최대 row 수 (성능 보호)
-MAX_RAW_ROWS = 5000
-
 
 # ─── 데이터 후처리 설정 ──────────────────────────────────────────
 # eqp_id 에 이 단어 중 하나라도 포함되면 raw_detail 결과에서 제외 (대소문자 무시).
@@ -233,7 +230,7 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
 
     qs = (
         qs.values(*RAW_COLUMNS)
-          .order_by("yyyymmdd")[:MAX_RAW_ROWS]
+          .order_by("yyyymmdd")
     )
 
     rows = list(qs)

@@ -14,9 +14,9 @@
     </button>
   </div>
 
-  <!-- Rank Limit -->
+  <!-- 표시 기간 (최근 N개) -->
   <div class="sf-sidebar__section">
-    <span class="sf-sidebar__section-label">Rank Limit</span>
+    <span class="sf-sidebar__section-label">표시 기간 (최근 N개)</span>
     <div class="sf-rank-group">
       <div class="sf-rank-item">
         <span class="sf-rank-item__label">M</span>
@@ -91,6 +91,9 @@
   <!-- Param Name -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterParamName">Param Name</label>
+    <input type="text" id="paramNameSearch" class="sf-rank-item__input"
+           placeholder="🔍 검색…" autocomplete="off"
+           style="width:100%; text-align:left; margin-bottom:6px;">
     <select id="filterParamName" name="param_name" multiple class="sf-select">
       <option value="ALL" selected>ALL</option>
       {% for v in filter_options.param_names %}

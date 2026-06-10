@@ -122,6 +122,18 @@ DATABASES = {
         "PORT":     os.environ.get("TPM_DB_PORT",     os.environ.get("DB_PORT", "3306")),
         "OPTIONS":  {"charset": "utf8mb4"} if os.environ.get("TPM_DB_ENGINE") else {},
     },
+    # ── checkdb (외부 시스템 DB — interlock_raw 버전 마커 조회 전용) ──
+    # cube 갱신 판단용 item_status.last_update_time 만 읽는다.
+    # 미연결/조회실패 시 chart_service 가 기존 큐브를 유지한다.
+    "checkdb": {
+        "ENGINE":   "django.db.backends.mysql",
+        "NAME":     os.environ.get("CHECK_DB_NAME", "django"),
+        "USER":     os.environ.get("CHECK_DB_USER", os.environ.get("DB_USER", "root")),
+        "PASSWORD": os.environ.get("CHECK_DB_PASSWORD", os.environ.get("DB_PASSWORD", "")),
+        "HOST":     os.environ.get("CHECK_DB_HOST", os.environ.get("DB_HOST", "127.0.0.1")),
+        "PORT":     os.environ.get("CHECK_DB_PORT", "3306"),
+        "OPTIONS":  {"charset": "utf8mb4"},
+    },
 }
  
 # ── DB 라우터 등록 ────────────────────────────────────────────────

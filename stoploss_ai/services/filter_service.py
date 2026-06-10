@@ -21,8 +21,8 @@ FILTER_FIELDS = [
     "line",
     "sdwt_prod",
     "eqp_model",
-    "eqp_id",
     "prc_group",
+    "eqp_id",
 ]
 
 ALL_VALUE = "ALL"

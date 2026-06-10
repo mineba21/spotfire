@@ -224,6 +224,10 @@ def run():
         cur.execute(DDL_REPORT)
         cur.execute(DDL_RAW)
 
+        # cube 빌드/기간 필터 성능용 인덱스 (개발 SQLite — 운영 MySQL 은 DBA 작업)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_ymd ON interlock_raw (yyyymmdd)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_raw_line_ymd ON interlock_raw (line, yyyymmdd)")
+
         cur.execute("DELETE FROM report_interlock")
         cur.execute("DELETE FROM interlock_raw")
 

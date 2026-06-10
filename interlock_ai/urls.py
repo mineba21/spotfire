@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/click-detail/",        views.api_click_detail,         name="api_click_detail"),
     path("api/click-detail-export/", views.api_click_detail_export,  name="api_click_detail_export"),
     path("api/filter-options/",      views.api_filter_options,       name="api_filter_options"),
+    path("api/top-aggregate/",       views.api_top_aggregate,        name="api_top_aggregate"),
 
     # ── API: AI Copilot ──────────────────────────────────────────
     path("api/ask-ai/",         views.api_ask_ai,         name="api_ask_ai"),

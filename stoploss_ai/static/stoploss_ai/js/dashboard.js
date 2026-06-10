@@ -66,8 +66,8 @@ const FILTER_ORDER = [
   { id: "filterLine",     dataKey: "lines",      field: "line"      },
   { id: "filterSdwtProd", dataKey: "sdwt_prods", field: "sdwt_prod" },
   { id: "filterEqpModel", dataKey: "eqp_models", field: "eqp_model" },
-  { id: "filterEqpId",    dataKey: "eqp_ids",    field: "eqp_id"    },
   { id: "filterPrcGroup", dataKey: "prc_groups", field: "prc_group" },
+  { id: "filterEqpId",    dataKey: "eqp_ids",    field: "eqp_id"    },
 ];
 
 // ── 테이블 정렬 상태 (테이블 ID → { col, dir }) ──────────────────

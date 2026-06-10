@@ -16,9 +16,11 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from interlock_ai.models import SpotfireReport, SpotfireRaw, LINE_REMAP
-from interlock_ai.services.filter_service import parse_sidebar_filters, build_filter_q
-from interlock_ai.services.chart_service  import get_chart_data, parse_rank_limits
+from interlock_ai.services.filter_service import parse_sidebar_filters
+from interlock_ai.services.chart_service  import (
+    get_chart_data, parse_rank_limits,
+    get_filter_options_from_cube, get_top_aggregate,
+)
 from interlock_ai.services.detail_service import get_raw_detail, iter_raw_detail_export, RAW_COLUMNS
 from interlock_ai.services.ai_service     import ask_ai, VALID_PAGE_CONTEXTS
 
@@ -39,54 +41,10 @@ VALID_FLAGS: set = {"M", "W", "D"}
 # 페이지 뷰
 # ─────────────────────────────────────────────────────────────────
 def index(request):
-    filter_options = {
-        "lines":        _get_distinct("line"),
-        "sdwt_prods":   _get_distinct("sdwt_prod"),
-        "eqp_models":   _get_distinct("eqp_model"),
-        "eqp_ids":      _get_distinct("eqp_id"),
-        "param_types":  _get_distinct("param_type"),
-        "param_names":  _get_distinct_raw("param_name"),
-    }
     context = {
-        "filter_options": filter_options,
+        "filter_options": get_filter_options_from_cube(),
     }
     return render(request, "interlock_ai/index.html", context)
-
-
-def _get_distinct(field: str) -> list:
-    values = (
-        SpotfireReport.objects
-        .exclude(**{field: ""})
-        .values_list(field, flat=True)
-        .distinct()
-        .order_by(field)
-    )
-    if field != "line":
-        return sorted({v for v in values if v})
-
-    # line 은 LINE_REMAP 매핑 적용 후 dedup, 미매칭은 [:2] fallback
-    out = set()
-    for v in values:
-        if not v:
-            continue
-        mapped = next(
-            (dst for src, dst in LINE_REMAP.items() if str(v).startswith(src)),
-            str(v)[:2],
-        )
-        out.add(mapped)
-    return sorted(out)
-
-
-def _get_distinct_raw(field: str) -> list:
-    """SpotfireRaw 에서 distinct 값 목록을 반환한다 (param_name 등 Raw 전용 필드용)."""
-    values = (
-        SpotfireRaw.objects
-        .exclude(**{field: ""})
-        .values_list(field, flat=True)
-        .distinct()
-        .order_by(field)
-    )
-    return sorted({v for v in values if v})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -176,72 +134,32 @@ def api_click_detail_export(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_filter_options(request):
-    """
-    GET /interlock-ai/api/filter-options/
-
-    사이드바 선택값을 GET 파라미터로 받아
-    해당 조건으로 필터링된 distinct 목록을 반환한다.
-
-    예) ?line=L1&eqp_model=MODEL-X
-        → line='L1' AND eqp_model='MODEL-X' 조건 하에
-          각 컬럼의 distinct 값 반환
-
-    rank 파라미터(m_rank/w_rank/d_rank)는 무시한다.
-    """
-    # FILTER_FIELDS 에 해당하는 파라미터만 읽어 Q 객체 생성
-    # parse_sidebar_filters 는 ALL 값·미선택을 빈 리스트로 정규화해 준다
     filters = parse_sidebar_filters(request.GET)
+    return JsonResponse({"ok": True, "data": get_filter_options_from_cube(filters)})
 
-    # SpotfireReport 에 없는 필드를 제외한 Q (chart/report용)
-    from interlock_ai.services.filter_service import REPORT_EXCLUDED_FIELDS
-    report_filters = {k: v for k, v in filters.items() if k not in REPORT_EXCLUDED_FIELDS}
-    q_report = build_filter_q(report_filters)
 
-    # SpotfireRaw 용 Q (param_name 포함 전체 필터)
-    q_raw = build_filter_q(filters)
-
-    def _filtered_distinct(field: str) -> list:
-        values = (
-            SpotfireReport.objects
-            .filter(q_report)
-            .exclude(**{field: ""})
-            .values_list(field, flat=True)
-            .distinct()
-            .order_by(field)
-        )
-        if field != "line":
-            return sorted({v for v in values if v})
-
-        out = set()
-        for v in values:
-            if not v:
-                continue
-            mapped = next(
-                (dst for src, dst in LINE_REMAP.items() if str(v).startswith(src)),
-                str(v)[:2],
-            )
-            out.add(mapped)
-        return sorted(out)
-
-    def _filtered_distinct_raw(field: str) -> list:
-        values = (
-            SpotfireRaw.objects
-            .filter(q_raw)
-            .exclude(**{field: ""})
-            .values_list(field, flat=True)
-            .distinct()
-            .order_by(field)
-        )
-        return sorted({v for v in values if v})
-
+# ─────────────────────────────────────────────────────────────────
+# API: top-aggregate  (cube 전수 집계 — Top Show)
+# ─────────────────────────────────────────────────────────────────
+@require_GET
+def api_top_aggregate(request):
+    flag      = request.GET.get("flag", "").strip().upper()
+    yyyy      = request.GET.get("yyyy", "").strip()
+    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
+    if not flag or not yyyy or not flagdates:
+        return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
+    if flag not in VALID_FLAGS:
+        return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
+    group_cols = [c.strip() for c in
+                  request.GET.get("group_cols", "line,eqp_id").split(",") if c.strip()]
+    try:
+        top_n = int(request.GET.get("top_n", 10))
+    except ValueError:
+        top_n = 10
+    filters = parse_sidebar_filters(request.GET)
+    rows = get_top_aggregate(flag, yyyy, flagdates, filters, group_cols, top_n)
     return JsonResponse({"ok": True, "data": {
-        "lines":        _filtered_distinct("line"),
-        "sdwt_prods":   _filtered_distinct("sdwt_prod"),
-        "eqp_models":   _filtered_distinct("eqp_model"),
-        "eqp_ids":      _filtered_distinct("eqp_id"),
-        "param_types":  _filtered_distinct("param_type"),
-        "param_names":  _filtered_distinct_raw("param_name"),
-    }})
+        "rows": rows, "group_cols": group_cols, "total": len(rows)}})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -281,12 +199,7 @@ def api_ask_ai(request):
     # ── filter_options: DB 실제 값 목록을 LLM context 에 전달 ──
     # LLM 이 "백호" 같은 자연어를 올바른 필드(sdwt_prod 등)에 매핑하기 위해
     # DB 에 존재하는 실제 값 목록을 함께 넘긴다.
-    filter_options = {
-        "lines":       _get_distinct("line"),
-        "sdwt_prods":  _get_distinct("sdwt_prod"),
-        "eqp_models":  _get_distinct("eqp_model"),
-        "param_types": _get_distinct("param_type"),
-    }
+    filter_options = get_filter_options_from_cube()
 
     # ── 서비스 호출 ───────────────────────────────────────────
     result = ask_ai(question, page_context, selected_bar, sidebar_filters, filter_options)

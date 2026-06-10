@@ -91,6 +91,7 @@
       clickDetail       : "{% url 'interlock_ai:api_click_detail' %}",
       clickDetailExport : "{% url 'interlock_ai:api_click_detail_export' %}",
       filterOptions     : "{% url 'interlock_ai:api_filter_options' %}",
+      topAggregate      : "{% url 'interlock_ai:api_top_aggregate' %}",
       askAi             : "{% url 'interlock_ai:api_ask_ai' %}",
     };
   </script>
@@ -372,6 +373,6 @@
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="{% static 'shared/sf-shared-filters.js' %}"></script>
-<script src="{% static 'interlock_ai/js/dashboard.js' %}"></script>
+<script src="{% static 'interlock_ai/js/dashboard.js' %}?v=20260610"></script>
 </body>
 </html>
