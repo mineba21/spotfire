@@ -66,23 +66,23 @@
     </select>
   </div>
 
-  <!-- EQP ID -->
-  <div class="sf-sidebar__section">
-    <label class="sf-sidebar__section-label" for="filterEqpId">EQP ID</label>
-    <select id="filterEqpId" name="eqp_id" multiple class="sf-select">
-      <option value="ALL" selected>ALL</option>
-      {% for v in filter_options.eqp_ids %}
-        <option value="{{ v }}">{{ v }}</option>
-      {% endfor %}
-    </select>
-  </div>
-
   <!-- PRC Group -->
   <div class="sf-sidebar__section">
     <label class="sf-sidebar__section-label" for="filterPrcGroup">PRC Group</label>
     <select id="filterPrcGroup" name="prc_group" multiple class="sf-select">
       <option value="ALL" selected>ALL</option>
       {% for v in filter_options.prc_groups %}
+        <option value="{{ v }}">{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- EQP ID -->
+  <div class="sf-sidebar__section">
+    <label class="sf-sidebar__section-label" for="filterEqpId">EQP ID</label>
+    <select id="filterEqpId" name="eqp_id" multiple class="sf-select">
+      <option value="ALL" selected>ALL</option>
+      {% for v in filter_options.eqp_ids %}
         <option value="{{ v }}">{{ v }}</option>
       {% endfor %}
     </select>

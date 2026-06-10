@@ -206,6 +206,51 @@ function persistSharedFilters() {
   SF_SHARED.save(collectFiltersAsDict());
 }
 
+// ── Param Name 검색 상태 ─────────────────────────────────────────
+// param_name 옵션 수가 많아 검색으로 좁혀볼 수 있게 한다.
+// 검색으로 DOM 옵션이 제거돼도 선택은 _paramNameSelected 에 보존된다.
+let _paramNameMaster = [];                 // 현재 cascading 으로 가능한 전체 param_name 목록
+const _paramNameSelected = new Set();      // 검색과 무관하게 유지되는 선택값
+let _pnSearchTimer = null;
+
+/**
+ * 검색어 부분일치(소문자) 한 항목 + 이미 선택된 항목을 합쳐
+ * #filterParamName 옵션을 재구성한다. 선택 복원, 없으면 ALL.
+ */
+function _applyParamNameSearch() {
+  const el = document.getElementById("filterParamName");
+  if (!el) return;
+  const term = (document.getElementById("paramNameSearch")?.value || "")
+    .trim().toLowerCase();
+
+  const visible = _paramNameMaster.filter((v) =>
+    (!term || String(v).toLowerCase().includes(term)) || _paramNameSelected.has(v)
+  );
+
+  el.innerHTML = `<option value="${ALL_VALUE}">ALL</option>` +
+    visible.map((v) => `<option value="${v}">${v}</option>`).join("");
+
+  let restored = 0;
+  Array.from(el.options).forEach((o) => {
+    if (o.value !== ALL_VALUE && _paramNameSelected.has(o.value)) {
+      o.selected = true;
+      restored++;
+    }
+  });
+  if (restored === 0) el.options[0].selected = true;
+}
+
+/** select change 시 선택 Set 동기화 (ALL 이면 clear). */
+function _syncParamNameSelected() {
+  const el = document.getElementById("filterParamName");
+  if (!el) return;
+  const selected = Array.from(el.selectedOptions).map((o) => o.value);
+  _paramNameSelected.clear();
+  if (!selected.includes(ALL_VALUE)) {
+    selected.forEach((v) => _paramNameSelected.add(v));
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 // 3. 초기화
@@ -221,6 +266,14 @@ document.addEventListener("DOMContentLoaded", () => {
   _applyParamTypeLabels(document.getElementById("filterParamType"));
 
   applySharedFiltersToSelects();   // 서버 렌더된 옵션 위에 공유 상태 덮어쓰기
+
+  // Param Name 검색: master 목록 초기화 + 공유 복원된 선택값 반영
+  const _pnEl = document.getElementById("filterParamName");
+  if (_pnEl) {
+    _paramNameMaster = Array.from(_pnEl.options)
+      .map((o) => o.value).filter((v) => v !== ALL_VALUE);
+  }
+  _syncParamNameSelected();
 
   fetchReportData();
 
@@ -253,6 +306,13 @@ document.addEventListener("DOMContentLoaded", () => {
   ["rankM", "rankW", "rankD"].forEach((id) => {
     on(id, "change", () => _scheduleAutoApply());
   });
+
+  // Param Name 검색 입력 (200ms 디바운스) + select 선택 동기화
+  on("paramNameSearch", "input", () => {
+    clearTimeout(_pnSearchTimer);
+    _pnSearchTimer = setTimeout(_applyParamNameSearch, 200);
+  });
+  on("filterParamName", "change", _syncParamNameSelected);
 
   document.querySelectorAll('input[name="detailMode"]').forEach((radio) => {
     radio.addEventListener("change", onDetailModeChange);
@@ -436,6 +496,16 @@ function _rebuildSelect(selectId, newValues, fieldName) {
   const el = document.getElementById(selectId);
   if (!el || !Array.isArray(newValues)) return;
 
+  // param_name 은 검색 기능과 연동 — master 갱신 후 검색 필터로 옵션 재구성
+  if (selectId === "filterParamName") {
+    _paramNameMaster = newValues.slice();
+    for (const v of Array.from(_paramNameSelected)) {
+      if (!_paramNameMaster.includes(v)) _paramNameSelected.delete(v);
+    }
+    _applyParamNameSearch();
+    return;
+  }
+
   // 현재 선택값 저장
   const prevSelected = new Set(
     Array.from(el.selectedOptions).map((o) => o.value).filter((v) => v !== ALL_VALUE)
@@ -475,6 +545,12 @@ function resetFilters() {
   document.getElementById("rankW").value        = 3;
   document.getElementById("rankD").value        = 7;
   // y_field 고정값 사용 — select 없음
+
+  // Param Name 검색 상태 초기화
+  const _pnSearch = document.getElementById("paramNameSearch");
+  if (_pnSearch) _pnSearch.value = "";
+  _paramNameSelected.clear();
+  _applyParamNameSearch();
 
   // 공유 필터 저장소도 초기화
   if (window.SF_SHARED) SF_SHARED.clear();
@@ -851,46 +927,45 @@ function renderRawTable() {
 // ── Top Show (cnt 기반 그룹 집계) ────────────────────────────
 
 /**
- * state.rawRows 를 JS 에서 직접 그룹별 카운팅해 Top-N 차트 + 테이블을 렌더링한다.
+ * cube 전수 집계 API(URLS.topAggregate)를 호출해 Top-N 차트 + 테이블을 렌더링한다.
  *
- * Raw 테이블은 이벤트 로그이므로 숫자 측정 컬럼이 없다.
- * 대신 topGroupSelect 에서 선택한 컬럼 조합으로 group_by 하고
- * 행 수를 cnt 로 집계한다.
+ * 기존엔 state.rawRows(5000건 cap)를 JS 에서 집계했으나 부정확했다.
+ * 이제 서버가 cube 전수를 group_by 하여 정렬·상위 N 까지 반환한다.
  *
  * 흐름:
  *   1. topGroupSelect.value ("line,eqp_id" 등) 파싱 → groupCols 배열
- *   2. state.rawRows 를 groupCols 기준으로 Map 집계 → { key: cnt }
- *   3. cnt 내림차순 정렬 → 상위 topN 추출
+ *   2. collectFilters() + flag/yyyy/flagdate(복수)/group_cols/top_n 으로 fetch
+ *   3. json.data.rows (서버에서 cnt 내림차순 + top_n 적용 완료) 를 그대로 사용
  *   4. Plotly 수평 bar + 순위 테이블 렌더링
  */
-function renderTopPanel() {
-  if (!state.rawRows.length) return;
+async function renderTopPanel() {
+  const bars = state.selectedBars;
+  if (!bars.length) return;
+
+  const flag = bars[0].flag;
+  const yyyy = bars[0].yyyy;
 
   const groupColStr = document.getElementById("topGroupSelect").value || "line,eqp_id";
   const groupCols   = groupColStr.split(",").map((c) => c.trim()).filter(Boolean);
   const topN        = Math.max(1, parseInt(document.getElementById("topNInput").value, 10) || 10);
 
-  // ── 그룹별 cnt 집계 ──────────────────────────────────────
-  const cntMap = new Map(); // key(string) → { cols 값들, cnt }
+  const params = collectFilters();
+  params.append("flag", flag);
+  params.append("yyyy", yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("group_cols", groupCols.join(","));
+  params.append("top_n", topN);
 
-  state.rawRows.forEach((row) => {
-    // 그룹 키: "L1|EQP-001" 형태 (구분자 | 사용)
-    const keyParts  = groupCols.map((col) => (row[col] != null ? String(row[col]) : ""));
-    const key       = keyParts.join("|");
-
-    if (cntMap.has(key)) {
-      cntMap.get(key).cnt += 1;
-    } else {
-      const entry = { cnt: 1 };
-      groupCols.forEach((col) => { entry[col] = row[col] != null ? String(row[col]) : ""; });
-      cntMap.set(key, entry);
-    }
-  });
-
-  // ── cnt 내림차순 정렬 → 상위 N 추출 ─────────────────────
-  const sorted = Array.from(cntMap.values())
-    .sort((a, b) => b.cnt - a.cnt)
-    .slice(0, topN);
+  let sorted;
+  try {
+    const res  = await fetch(`${URLS.topAggregate}?${params.toString()}`);
+    const json = await res.json();
+    if (!json.ok) { showToast(MSG.API_ERROR(json.error)); return; }
+    sorted = json.data.rows || [];   // 서버에서 cnt 내림차순 + topN slice 완료
+  } catch (err) {
+    showToast(MSG.NET_ERROR(err.message));
+    return;
+  }
 
   if (!sorted.length) {
     showToast("집계 결과가 없습니다.");
@@ -1020,24 +1095,44 @@ function _renderTopTable(rows, groupCols) {
 }
 
 /**
- * Top Show bar 클릭 핸들러.
- * 클릭된 그룹(groupCols 기준)에 해당하는 rawRows 를 필터링해 하단에 표시한다.
+ * Top Show bar 클릭 핸들러 (서버 재조회).
+ * 클릭된 그룹 조건을 사이드바 필터에 덮어쓴 뒤 click-detail 을 재조회해
+ * 해당 그룹의 raw 전수를 하단에 표시한다.
  *
  * @param {object}   clickedRow  - sorted 배열의 해당 항목 (groupCols 값 + cnt 포함)
  * @param {string[]} groupCols   - 현재 집계 기준 컬럼 목록
  */
-function onTopBarClick(clickedRow, groupCols) {
-  // 클릭된 그룹의 조건에 맞는 raw rows 필터링
-  const filtered = state.rawRows.filter((row) =>
-    groupCols.every((col) => String(row[col] ?? "") === String(clickedRow[col] ?? ""))
-  );
+async function onTopBarClick(clickedRow, groupCols) {
+  const bars = state.selectedBars;
+  if (!bars.length) return;
+
+  const flag = bars[0].flag;
+  const yyyy = bars[0].yyyy;
+
+  const params = collectFilters();
+  params.append("flag", flag);
+  params.append("yyyy", yyyy);
+  bars.forEach((b) => params.append("flagdate", b.flagdate));
+
+  // 클릭된 그룹 조건으로 해당 컬럼 필터를 덮어쓴다 (기존 선택값 제거 후 단일값 지정)
+  groupCols.forEach((col) => {
+    params.delete(col);
+    params.append(col, clickedRow[col] != null ? String(clickedRow[col]) : "");
+  });
 
   // 배지 텍스트: "line=L1 / eqp_id=EQP-001" 형태
   const badgeText = groupCols
     .map((col) => `${col}=${clickedRow[col] || "-"}`)
     .join(" / ");
 
-  _renderTopRaw(filtered, badgeText);
+  try {
+    const res  = await fetch(`${URLS.clickDetail}?${params.toString()}`);
+    const json = await res.json();
+    if (!json.ok) { showToast(MSG.API_ERROR(json.error)); return; }
+    _renderTopRaw(json.data.rows || [], badgeText);
+  } catch (err) {
+    showToast(MSG.NET_ERROR(err.message));
+  }
 }
 
 /**

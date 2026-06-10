@@ -66,6 +66,8 @@ class TpmRouter:
         managed = False 이므로 stoploss_ai 는 migrate 하지 않는다.
         다른 앱은 default DB 에서만 migrate 허용.
         """
+        if db == "checkdb":
+            return False   # 외부 시스템 DB — migrate 절대 금지
         if app_label == self.STOPLOSS_APP:
             return False   # tpm DB 에 대해 migrate 안 함
         if db == self.TPM_DB:

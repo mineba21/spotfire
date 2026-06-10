@@ -1,209 +1,234 @@
 """
 services/chart_service.py
 
-역할:
-- Report 테이블 QuerySet 에서 M/W/D chart 용 JSON 데이터를 만든다
-- legend 기준(line/sdwt_prod/eqp_id/eqp_model)으로 grouped bar 를 지원한다
-- y축 기준(cnt/ratio)을 파라미터로 바꿀 수 있다
-- rank 필터(상위 N개만 표시)를 적용한다
-- yyyy_map 을 반환해 JS bar 클릭 시 정확한 연도 참조가 가능하다
-
-컬럼 추가 시:
-  - LEGEND_FIELDS 에 새 그룹 기준 컬럼명을 추가하면 된다
-  - y_field 파라미터에 새 집계 컬럼명을 넘기면 바로 사용 가능
-  - get_chart_data() 의 values() 에 새 컬럼을 추가하면 된다
+[v2 변경]
+- 데이터 소스: report_interlock → interlock_raw (cube 캐싱)
+- 조회 기간 상한: 최근 12개월
+- cube 갱신: checkdb.item_status.last_update_time 버전 마커 비교 (30초 주기 확인)
+- m_rank/w_rank/d_rank: "최근 N개 기간 표시" 로 해석
 """
-
+import datetime
+import logging
+import threading
+import time
 from collections import defaultdict
-from interlock_ai.models import SpotfireReport
-from .filter_service import build_filter_q, REPORT_EXCLUDED_FIELDS
 
-# ─────────────────────────────────────────────────────────────────
-# 상수
-# ─────────────────────────────────────────────────────────────────
-# legend 로 사용 가능한 컬럼 목록 (확장 시 여기에 추가)
-LEGEND_FIELDS = ["line", "sdwt_prod", "eqp_model", "eqp_id", "param_type"]
+from django.db import connections
+from django.db.models import Count
 
-# 기본 M/W/D 플래그
+from interlock_ai.models import SpotfireRaw
+
+logger = logging.getLogger(__name__)
+
+# ─── 설정 ────────────────────────────────────────────────────────
+RAW_CHART_MAX_MONTHS = 12
 FLAGS = ["M", "W", "D"]
+DEFAULT_PERIOD_LIMIT = 999
 
-# rank 최대값 (이 값 초과인 row 는 차트에 포함하지 않음)
-DEFAULT_RANK_LIMIT = 999  # 사실상 무제한
+CUBE_DIMS = ["yyyymmdd", "line", "sdwt_prod", "eqp_model",
+             "eqp_id", "param_type", "param_name"]
+_DIM_IDX = {f: i for i, f in enumerate(CUBE_DIMS)}
+
+# ─── 데이터 버전 마커 (checkdb.item_status) ──────────────────────
+CHECK_DB_ALIAS         = "checkdb"
+DATA_VERSION_ITEM      = "interlock_raw"
+VERSION_CHECK_INTERVAL = 30   # 초
+
+_cube_lock = threading.Lock()
+_cube_data: list = None
+_cube_version: str = ""
+_version_checked_at: float = 0.0
 
 
-def get_chart_data(filters: dict, rank_limits: dict, y_field: str = "cnt") -> dict:
-    """
-    M / W / D 각 flag 에 대한 chart 데이터를 반환한다.
+def _read_data_version():
+    """checkdb 조회 실패 시 None — 기존 큐브 유지 신호."""
+    try:
+        with connections[CHECK_DB_ALIAS].cursor() as cur:
+            cur.execute(
+                "SELECT last_update_time FROM item_status WHERE item_name = %s",
+                [DATA_VERSION_ITEM],
+            )
+            row = cur.fetchone()
+        return str(row[0]) if row else ""
+    except Exception as exc:
+        logger.warning("[Cube] checkdb 버전 조회 실패 — 기존 큐브 유지: %s", exc)
+        return None
 
-    파라미터:
-        filters     : parse_sidebar_filters() 결과
-        rank_limits : {"M": 3, "W": 3, "D": 7} 형태. 없으면 전체 포함
-        y_field     : y축 값으로 사용할 컬럼명 ("cnt" 또는 "ratio")
 
-    반환 구조:
-        {
-            "M": {
-                "flagdates": [...],
-                "yyyy_map":  {"M01": "2024", "M02": "2024"},   ← 추가됨
-                "series":    [{"name": "ALL", "y": [...]}],
-            },
-            "W": {...},
-            "D": {...},
-        }
+def _cutoff_ymd8(today=None) -> str:
+    today = today or datetime.date.today()
+    total = today.year * 12 + (today.month - 1) - (RAW_CHART_MAX_MONTHS - 1)
+    return datetime.date(total // 12, total % 12 + 1, 1).strftime("%Y%m%d")
 
-    yyyy_map 용도:
-        JS 에서 bar 클릭 시 state.chartData[flag].yyyy_map[flagdate] 로
-        정확한 연도를 참조한다. (현재연도 추측 로직 제거)
 
-    컬럼 추가 시:
-        values() 안에 원하는 컬럼명을 추가하면 된다.
-        단, SpotfireReport 모델에도 해당 필드가 있어야 한다.
-    """
-    # SpotfireReport 에 없는 필드(param_name 등)를 필터에서 제외한다
-    report_filters = {k: v for k, v in filters.items() if k not in REPORT_EXCLUDED_FIELDS}
+def _detect_hyphen() -> bool:
+    sample = SpotfireRaw.objects.values_list("yyyymmdd", flat=True).first()
+    return "-" in str(sample) if sample else False
 
-    # sidebar 필터 Q 객체 생성
-    q = build_filter_q(report_filters)
 
-    # report 테이블 전체 조회 (필터 적용)
-    # 컬럼 추가 시: values() 에 컬럼명을 추가하면 된다
+def _build_cube() -> list:
+    cutoff = _cutoff_ymd8()
+    cutoff_db = (f"{cutoff[:4]}-{cutoff[4:6]}-{cutoff[6:8]}"
+                 if _detect_hyphen() else cutoff)
     qs = (
-        SpotfireReport.objects
-        .filter(q)
-        .values(
-            "flag", "yyyy", "flagdate",
-            "line", "sdwt_prod", "eqp_model", "eqp_id", "param_type",
-            "cnt", "ratio", "rank",
-            # 컬럼 추가 예시: "new_col",
-        )
-        .order_by("flag", "flagdate")
+        SpotfireRaw.objects
+        .filter(yyyymmdd__gte=cutoff_db)
+        .values(*CUBE_DIMS)
+        .annotate(cnt=Count("pk"))
     )
+    cube = []
+    for row in qs.iterator(chunk_size=2000):
+        ymd8 = str(row["yyyymmdd"]).replace("-", "")
+        cube.append((
+            ymd8, row["line"], row["sdwt_prod"], row["eqp_model"],
+            row["eqp_id"], row["param_type"], row["param_name"], row["cnt"],
+        ))
+    return cube
+
+
+def _get_cube() -> list:
+    global _cube_data, _cube_version, _version_checked_at
+    now = time.time()
+    if _cube_data is not None and now - _version_checked_at < VERSION_CHECK_INTERVAL:
+        return _cube_data
+    version = _read_data_version()
+    _version_checked_at = now
+    if _cube_data is not None and (version is None or version == _cube_version):
+        return _cube_data
+    with _cube_lock:
+        if _cube_data is not None and version is not None and version == _cube_version:
+            return _cube_data
+        _cube_data = _build_cube()
+        if version is not None:
+            _cube_version = version
+        logger.info("[Cube] 재빌드 | version=%s | rows=%d", _cube_version, len(_cube_data))
+        return _cube_data
+
+
+def invalidate_cube():
+    """수동 강제 갱신용."""
+    global _cube_data, _cube_version
+    with _cube_lock:
+        _cube_data = None
+        _cube_version = ""
+
+
+# ─── 차트 데이터 ─────────────────────────────────────────────────
+def get_chart_data(filters: dict, rank_limits: dict, y_field: str = "cnt") -> dict:
+    cube = _get_cube()
+    active = [(_DIM_IDX[f], set(v)) for f, v in filters.items()
+              if v and f in _DIM_IDX]
+
+    daily = defaultdict(int)
+    for row in cube:
+        if all(row[idx] in allowed for idx, allowed in active):
+            daily[row[0]] += row[7]
+
+    agg = {f: defaultdict(int) for f in FLAGS}
+    yyyy_map = {f: {} for f in FLAGS}
+    for ymd8, cnt in daily.items():
+        yyyy, mm, dd = ymd8[:4], ymd8[4:6], ymd8[6:8]
+        try:
+            date = datetime.date(int(yyyy), int(mm), int(dd))
+        except ValueError:
+            continue
+        m_key = f"M{mm}"
+        agg["M"][m_key] += cnt
+        yyyy_map["M"].setdefault(m_key, yyyy)
+        w_num = (date - datetime.date(int(yyyy), 1, 1)).days // 7 + 1
+        w_key = f"W{w_num:02d}"
+        agg["W"][w_key] += cnt
+        yyyy_map["W"].setdefault(w_key, yyyy)
+        d_key = f"{mm}/{dd}"
+        agg["D"][d_key] += cnt
+        yyyy_map["D"].setdefault(d_key, yyyy)
 
     result = {}
-
     for flag in FLAGS:
-        # 해당 flag 의 rank 상한 (없으면 무제한)
-        rank_limit = rank_limits.get(flag, DEFAULT_RANK_LIMIT)
-
-        # 해당 flag + rank 필터 적용
-        flag_rows = list(qs.filter(flag=flag, rank__lte=rank_limit))
-
-        result[flag] = _build_series(flag_rows, y_field)
-
+        limit = rank_limits.get(flag, DEFAULT_PERIOD_LIMIT)
+        keys = sorted(agg[flag].keys(),
+                      key=lambda k: (yyyy_map[flag][k], k))[-limit:]
+        result[flag] = {
+            "flagdates": keys,
+            "yyyy_map":  {k: yyyy_map[flag][k] for k in keys},
+            "series":    [{"name": "ALL", "y": [agg[flag][k] for k in keys]}],
+        }
     return result
 
 
-def _build_series(rows: list, y_field: str) -> dict:
-    """
-    단일 flag 의 row 목록을 Plotly 용 series 구조로 변환한다. (ALL 모드)
-
-    반환 구조:
-        {
-            "flagdates": ["M01", "M02", ...],
-            "yyyy_map":  {"M01": "2024", "M02": "2024"},
-            "series":    [{"name": "ALL", "y": [75.0, 80.0, ...]}],
-        }
-
-    legend 모드 확장 시:
-        get_chart_data() 에 legend_field 파라미터를 추가하고
-        _build_series_grouped() 로 분기하면 된다. (함수는 아래에 구현됨)
-    """
-    # x축: flagdate 목록 (중복 제거, 정렬)
-    flagdates = sorted({row["flagdate"] for row in rows})
-
-    # ── yyyy_map 구성 ──────────────────────────────────────────
-    # flagdate → yyyy 매핑 (동일 flagdate 에 yyyy 가 여러 개이면 첫 번째 사용)
-    # 용도: JS bar 클릭 시 click-detail 파라미터 yyyy 를 정확히 전달하기 위함
-    yyyy_map: dict = {}
-    for row in rows:
-        fd = row["flagdate"]
-        if fd not in yyyy_map:
-            # 첫 번째로 만나는 yyyy 를 해당 flagdate 의 대표 연도로 사용
-            yyyy_map[fd] = row["yyyy"]
-
-    # ── y값 합산 ───────────────────────────────────────────────
-    agg: dict = defaultdict(float)  # {flagdate: sum(y_field)}
-    for row in rows:
-        fd  = row["flagdate"]
-        val = row.get(y_field) or 0  # None 방어
-        agg[fd] += val
-
-    # Plotly 형식: x 순서에 맞춰 y 값 배열 생성
-    y_values = [round(agg[fd], 4) for fd in flagdates]
-
-    return {
-        "flagdates": flagdates,
-        "yyyy_map":  yyyy_map,   # ← 이번 단계 추가
-        "series": [
-            {"name": "ALL", "y": y_values}
-        ],
-    }
-
-
-def _build_series_grouped(rows: list, y_field: str, legend_field: str) -> dict:
-    """
-    legend 필드 기준으로 grouped bar series 를 만든다.
-
-    legend_field 예: "line", "eqp_model" 등
-
-    활성화 방법:
-        get_chart_data() 에 legend_field 파라미터를 추가하고
-        _build_series(flag_rows, y_field) 호출을
-        _build_series_grouped(flag_rows, y_field, legend_field) 로 교체한다.
-
-    컬럼 추가 시:
-        LEGEND_FIELDS 에 새 컬럼명을 추가하면 된다.
-    """
-    flagdates = sorted({row["flagdate"] for row in rows})
-
-    # yyyy_map (grouped 모드에서도 동일하게 제공)
-    yyyy_map: dict = {}
-    for row in rows:
-        fd = row["flagdate"]
-        if fd not in yyyy_map:
-            yyyy_map[fd] = row["yyyy"]
-
-    # legend 값 목록 (정렬)
-    legends = sorted({row.get(legend_field, "UNKNOWN") for row in rows})
-
-    # {legend: {flagdate: sum}} 집계
-    agg: dict = defaultdict(lambda: defaultdict(float))
-    for row in rows:
-        fd  = row["flagdate"]
-        leg = row.get(legend_field, "UNKNOWN")
-        val = row.get(y_field) or 0
-        agg[leg][fd] += val
-
-    series = []
-    for leg in legends:
-        y_values = [round(agg[leg][fd], 4) for fd in flagdates]
-        series.append({"name": leg, "y": y_values})
-
-    return {
-        "flagdates": flagdates,
-        "yyyy_map":  yyyy_map,
-        "series":    series,
-    }
-
-
 def parse_rank_limits(get_params) -> dict:
-    """
-    querystring 에서 m_rank / w_rank / d_rank 를 파싱한다.
-
-    예) ?m_rank=3&w_rank=3&d_rank=7
-    → {"M": 3, "W": 3, "D": 7}
-
-    값이 없거나 숫자가 아니면 DEFAULT_RANK_LIMIT 을 사용한다.
-    """
-    def _safe_int(val, default: int) -> int:
-        # 숫자 변환 실패 시 default 반환
+    def _safe_int(val, default):
         try:
             return int(val)
         except (TypeError, ValueError):
             return default
-
     return {
-        "M": _safe_int(get_params.get("m_rank"), DEFAULT_RANK_LIMIT),
-        "W": _safe_int(get_params.get("w_rank"), DEFAULT_RANK_LIMIT),
-        "D": _safe_int(get_params.get("d_rank"), DEFAULT_RANK_LIMIT),
+        "M": _safe_int(get_params.get("m_rank"), DEFAULT_PERIOD_LIMIT),
+        "W": _safe_int(get_params.get("w_rank"), DEFAULT_PERIOD_LIMIT),
+        "D": _safe_int(get_params.get("d_rank"), DEFAULT_PERIOD_LIMIT),
     }
+
+
+# ─── 사이드바 필터 옵션 (cube 기반) ──────────────────────────────
+def get_filter_options_from_cube(constraints: dict = None) -> dict:
+    cube = _get_cube()
+    active = [(_DIM_IDX[f], set(v)) for f, v in (constraints or {}).items()
+              if v and f in _DIM_IDX]
+    out = {f: set() for f in CUBE_DIMS[1:]}
+    for row in cube:
+        if all(row[i] in a for i, a in active):
+            for f in out:
+                if row[_DIM_IDX[f]]:
+                    out[f].add(row[_DIM_IDX[f]])
+    return {
+        "lines":       sorted(out["line"]),
+        "sdwt_prods":  sorted(out["sdwt_prod"]),
+        "eqp_models":  sorted(out["eqp_model"]),
+        "eqp_ids":     sorted(out["eqp_id"]),
+        "param_types": sorted(out["param_type"]),
+        "param_names": sorted(out["param_name"]),
+    }
+
+
+# ─── Top Show 집계 (cube 전수) ───────────────────────────────────
+TOP_ALLOWED_GROUP_COLS = frozenset(CUBE_DIMS) - {"yyyymmdd"}
+TOP_MAX_N = 200
+
+
+def get_top_aggregate(flag, yyyy, flagdates, filters, group_cols, top_n=10):
+    from interlock_ai.services.detail_service import get_date_range  # 순환 import 방지
+
+    if isinstance(flagdates, str):
+        flagdates = [flagdates]
+    flagdates = [fd for fd in flagdates if fd]
+    group_cols = [c for c in group_cols if c in TOP_ALLOWED_GROUP_COLS]
+    if not group_cols or not flagdates:
+        return []
+    top_n = max(1, min(int(top_n or 10), TOP_MAX_N))
+
+    ranges = []
+    for fd in flagdates:
+        s, e = get_date_range(flag, yyyy, fd)
+        if s and e:
+            ranges.append((s, e))
+    if not ranges:
+        return []
+
+    cube = _get_cube()
+    active = [(_DIM_IDX[f], set(v)) for f, v in filters.items()
+              if v and f in _DIM_IDX]
+    g_idx = [_DIM_IDX[c] for c in group_cols]
+
+    agg = defaultdict(int)
+    for row in cube:
+        ymd = row[0]
+        if not any(s <= ymd <= e for s, e in ranges):
+            continue
+        if not all(row[i] in allowed for i, allowed in active):
+            continue
+        agg[tuple(row[i] for i in g_idx)] += row[7]
+
+    result = [{**dict(zip(group_cols, key)), "cnt": cnt}
+              for key, cnt in agg.items()]
+    result.sort(key=lambda r: r["cnt"], reverse=True)
+    return result[:top_n]
