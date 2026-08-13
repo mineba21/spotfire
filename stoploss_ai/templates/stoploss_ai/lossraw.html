@@ -38,7 +38,27 @@
       border-radius: 14px; padding: 2px 10px;
     }
     .lr-rawpanel-count { margin-left: auto; font-size: 11px; color: var(--sf-text-muted); }
-    .lr-date-row { display: flex; flex-direction: column; gap: 6px; }
+
+    /* daterangepicker 달력 — 다크 테마 대응 (라이브러리 CSS 는 라이트 전용) */
+    html[data-theme="dark"] .daterangepicker {
+      background: var(--sf-surface);
+      border-color: var(--sf-border);
+      color: var(--sf-text);
+    }
+    html[data-theme="dark"] .daterangepicker .calendar-table {
+      background: var(--sf-surface);
+      border-color: var(--sf-border);
+    }
+    html[data-theme="dark"] .daterangepicker td.off,
+    html[data-theme="dark"] .daterangepicker td.off.in-range {
+      background: var(--sf-surface);
+      color: var(--sf-text-xmuted, #64748b);
+    }
+    html[data-theme="dark"] .daterangepicker td.available:hover,
+    html[data-theme="dark"] .daterangepicker th.available:hover {
+      background: var(--sf-surface-2);
+    }
+    html[data-theme="dark"] .daterangepicker:after { border-bottom-color: var(--sf-surface); }
 
     /* Page Tab Bar */
     .sf-pagetab-bar {
@@ -122,12 +142,15 @@
       </button>
     </div>
 
-    <!-- 기간 -->
+    <!-- 기간 (daterangepicker — 날짜 클릭 즉시 반영) -->
     <div class="sf-sidebar__section">
       <span class="sf-sidebar__section-label">기간</span>
-      <div class="lr-date-row">
-        <input type="date" id="filterStart" class="sf-rank-item__input" style="text-align:left;">
-        <input type="date" id="filterEnd"   class="sf-rank-item__input" style="text-align:left;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="filterStart" class="sf-rank-item__input"
+               style="text-align:left; flex:1; min-width:0;" readonly>
+        <span style="color:var(--sf-text-muted); font-size:11px; flex-shrink:0;">~</span>
+        <input type="text" id="filterEnd" class="sf-rank-item__input"
+               style="text-align:left; flex:1; min-width:0;" readonly>
       </div>
     </div>
 
@@ -304,6 +327,15 @@
 <div class="sf-toast" id="sfToast" role="alert" aria-live="assertive"></div>
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-<script src="{% static 'stoploss_ai/js/lossraw.js' %}?v=20260619"></script>
+
+<!-- 기간 필터용 daterangepicker (로드 순서 필수: jquery → moment → daterangepicker) -->
+<!-- 사내망에서 CDN 이 막히면 static/shared/daterangepicker/ 로 로컬 서빙 전환 -->
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daterangepicker@3.1.0/daterangepicker.css">
+<script src="https://cdn.jsdelivr.net/npm/daterangepicker@3.1.0/daterangepicker.js"></script>
+
+<!-- lossraw.js 는 위 스크립트들보다 반드시 뒤에 로드 -->
+<script src="{% static 'stoploss_ai/js/lossraw.js' %}?v=20260813"></script>
 </body>
 </html>

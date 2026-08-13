@@ -15,6 +15,9 @@ services/detail_service.py
 import calendar
 import logging
 import datetime
+
+from django.db.models import Q
+
 logger = logging.getLogger(__name__)
 
 from interlock_ai.models import SpotfireRaw
@@ -159,80 +162,114 @@ def _parse_flagdate_d(flagdate: str, year: int) -> "datetime.date | None":
         return None
 
 
+def normalize_fd_pairs(flagdates, yyyy: str) -> list:
+    """
+    flagdates 입력을 (flagdate, yyyy) 쌍 리스트로 정규화한다 (하위 호환).
+
+      1) "M03"                            → yyyy 인자 사용
+      2) ["M03", "M10"]                   → 모두 yyyy 인자 사용 (구버전)
+      3) [("M03","2026"), ("M10","2025")] → 쌍별 연도 사용 (신규, 권장)
+    """
+    if isinstance(flagdates, str):
+        flagdates = [flagdates]
+
+    fd_pairs = []
+    for item in flagdates or []:
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            fd, fy = str(item[0]).strip(), str(item[1]).strip()
+        else:
+            fd, fy = str(item).strip(), yyyy
+        if fd:
+            fd_pairs.append((fd, fy))
+    return fd_pairs
+
+
+def _detect_ymd_hyphen() -> bool:
+    """DB yyyymmdd 저장 형식이 "2026-04-03"(하이픈) 인지 "20260403" 인지 감지."""
+    sample = SpotfireRaw.objects.values_list("yyyymmdd", flat=True).first()
+    return "-" in str(sample) if sample else False
+
+
+def _to_db_ymd(ymd8: str, has_hyphen: bool) -> str:
+    if has_hyphen and len(ymd8) == 8 and ymd8.isdigit():
+        return f"{ymd8[:4]}-{ymd8[4:6]}-{ymd8[6:8]}"
+    return ymd8
+
+
+def _build_date_q(flag: str, fd_pairs: list):
+    """
+    각 (flagdate, yyyy) 범위를 OR 로 결합한 Q 를 반환한다.
+
+    min~max 로 감싸면 선택하지 않은 중간 기간까지 조회되므로 반드시 OR 로 묶는다.
+    (예: M03 + M10 선택 → 3월 / 10월 두 구간만)
+    유효 범위가 하나도 없으면 None.
+    """
+    has_hyphen = _detect_ymd_hyphen()
+
+    date_q    = Q()
+    range_log = []
+    for fd, fy in fd_pairs:
+        s, e = get_date_range(flag, fy, fd)
+        if not (s and e):
+            logger.warning("get_date_range None | flag=%s yyyy=%s fd=%s", flag, fy, fd)
+            continue
+        date_q |= Q(yyyymmdd__gte=_to_db_ymd(s, has_hyphen),
+                    yyyymmdd__lte=_to_db_ymd(e, has_hyphen))
+        range_log.append(f"{fy}/{fd}:{s}~{e}")
+
+    if not range_log:
+        return None
+
+    logger.info("[Detail] flag=%s | ranges=[%s] | 하이픈=%s",
+                flag, ", ".join(range_log), has_hyphen)
+    return date_q
+
+
+def _normalize_act_time(rows):
+    """
+    act_time 표시 형식 정규화.
+
+    DB 는 DATETIME 이지만 모델은 CharField 라 datetime 객체가 그대로 넘어오고,
+    JsonResponse 직렬화 단계에서 ISO("T") 형식이 된다. 문자열 replace 로는
+    잡히지 않으므로 여기서 naive datetime → "YYYY-MM-DD HH:MM:SS" 로 변환한다.
+    """
+    for row in rows:
+        at = row.get("act_time")
+        if hasattr(at, "tzinfo") and at.tzinfo is not None:
+            at = at.replace(tzinfo=None)
+        if hasattr(at, "strftime"):
+            row["act_time"] = at.strftime("%Y-%m-%d %H:%M:%S")
+        elif at and "T" in str(at):
+            row["act_time"] = str(at).replace("T", " ")
+    return rows
+
+
 def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
     """
-    (flag, yyyy, flagdates) + sidebar 필터 기준으로 raw data 를 조회한다.
+    (flag, flagdates) + sidebar 필터 기준으로 raw data 를 조회한다.
 
-    - flagdates: 단일 str 또는 list[str] (멀티 bar 선택 지원)
+    - flagdates: normalize_fd_pairs 가 받는 모든 형식 지원 (쌍 권장)
+    - 각 flagdate 범위는 OR 로 결합한다 (min~max 로 감싸지 않음)
     반환: dict list (각 dict 는 RAW_COLUMNS 에 정의된 컬럼만 포함)
     Raw 테이블은 이벤트 로그이므로 건수(행 수) 자체가 발생 횟수를 의미한다.
     """
-    # 단일 str 하위 호환
-    if isinstance(flagdates, str):
-        flagdates = [flagdates]
-    flagdates = [fd for fd in flagdates if fd]
-    if not flagdates:
+    fd_pairs = normalize_fd_pairs(flagdates, yyyy)
+    if not fd_pairs:
         return []
 
-    # 여러 flagdate 의 date range 를 합친다
-    starts, ends = [], []
-    for fd in flagdates:
-        s, e = get_date_range(flag, yyyy, fd)
-        if s and e:
-            starts.append(s)
-            ends.append(e)
-
-    if not starts:
-        logger.warning("get_date_range 반환 None | flag=%s yyyy=%s flagdates=%s", flag, yyyy, flagdates)
+    date_q = _build_date_q(flag, fd_pairs)
+    if date_q is None:
         return []
 
-    start_ymd, end_ymd = min(starts), max(ends)
-
-    q = build_filter_q(filters)
-
-    # ── yyyymmdd 포맷 자동 감지 ──────────────────────────────
-    # DB 저장 형식이 "20260403"(숫자) 또는 "2026-04-03"(하이픈) 중 하나일 수 있음.
-    # 샘플 1건으로 실제 형식을 감지한 뒤 start/end 를 맞춰서 필터링한다.
-    sample_qs  = SpotfireRaw.objects.values_list("yyyymmdd", flat=True).first()
-    sample_fmt = str(sample_qs) if sample_qs else ""
-    has_hyphen = "-" in sample_fmt
-
-    logger.info(
-        "[Detail] flag=%s | start_ymd=%r | end_ymd=%r | DB yyyymmdd 샘플=%r (하이픈=%s)",
-        flag, start_ymd, end_ymd, sample_fmt, has_hyphen,
-    )
-
-    if has_hyphen:
-        # DB 가 "2026-04-03" 형식 → start/end 를 하이픈 형식으로 변환
-        def to_hyphen(ymd8):  # "20260403" → "2026-04-03"
-            if len(ymd8) == 8 and ymd8.isdigit():
-                return f"{ymd8[:4]}-{ymd8[4:6]}-{ymd8[6:8]}"
-            return ymd8  # 이미 하이픈 형식이면 그대로
-        start_filter = to_hyphen(start_ymd)
-        end_filter   = to_hyphen(end_ymd)
-    else:
-        # DB 가 "20260403" 형식 → 그대로 사용
-        start_filter = start_ymd
-        end_filter   = end_ymd
-
-    logger.info("[Detail] 실제 필터값 | yyyymmdd__gte=%r | yyyymmdd__lte=%r", start_filter, end_filter)
-
-    qs = (
-        SpotfireRaw.objects
-        .filter(q)
-        .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
-    )
+    q  = build_filter_q(filters)
+    qs = SpotfireRaw.objects.filter(q).filter(date_q)
 
     # eqp_id 제외 키워드 (DB 단계 — 효율적)
     for kw in EQP_ID_EXCLUDE_KEYWORDS:
         if kw:
             qs = qs.exclude(eqp_id__icontains=kw)
 
-    qs = (
-        qs.values(*RAW_COLUMNS)
-          .order_by("yyyymmdd")
-    )
-
+    qs   = qs.values(*RAW_COLUMNS).order_by("yyyymmdd", "act_time")
     rows = list(qs)
 
     # sdwt_prod 치환 (Python 단계 — 사이드바는 원본 그대로)
@@ -241,6 +278,8 @@ def get_raw_detail(flag: str, yyyy: str, flagdates, filters: dict) -> list:
             sp = row.get("sdwt_prod")
             if sp in SDWT_PROD_REPLACEMENTS:
                 row["sdwt_prod"] = SDWT_PROD_REPLACEMENTS[sp]
+
+    _normalize_act_time(rows)
 
     logger.info("[Detail] 조회 결과 %d건", len(rows))
 
@@ -251,55 +290,28 @@ def iter_raw_detail_export(flag: str, yyyy: str, flagdates, filters: dict):
     """
     Excel export 용 raw 행 iterator.
 
-    get_raw_detail 와 같은 scope (sidebar 필터 + 기간) 이지만 MAX_RAW_ROWS limit
-    없이 queryset.iterator() 를 반환한다. openpyxl write_only 모드와 조합해 메모리
-    효율적 스트리밍 가능.
+    get_raw_detail 와 같은 scope (sidebar 필터 + 기간, 쌍별 연도 + OR 결합) 이지만
+    MAX_RAW_ROWS limit 없이 queryset.iterator() 를 반환한다. openpyxl write_only
+    모드와 조합해 메모리 효율적 스트리밍 가능.
     """
-    if isinstance(flagdates, str):
-        flagdates = [flagdates]
-    flagdates = [fd for fd in flagdates if fd]
-    if not flagdates:
+    fd_pairs = normalize_fd_pairs(flagdates, yyyy)
+    if not fd_pairs:
         return iter(())
 
-    starts, ends = [], []
-    for fd in flagdates:
-        s, e = get_date_range(flag, yyyy, fd)
-        if s and e:
-            starts.append(s)
-            ends.append(e)
-    if not starts:
+    date_q = _build_date_q(flag, fd_pairs)
+    if date_q is None:
         return iter(())
 
-    start_ymd, end_ymd = min(starts), max(ends)
-    q = build_filter_q(filters)
+    q  = build_filter_q(filters)
+    qs = SpotfireRaw.objects.filter(q).filter(date_q)
 
-    sample_qs  = SpotfireRaw.objects.values_list("yyyymmdd", flat=True).first()
-    sample_fmt = str(sample_qs) if sample_qs else ""
-    has_hyphen = "-" in sample_fmt
-
-    if has_hyphen:
-        def to_hyphen(ymd8):
-            if len(ymd8) == 8 and ymd8.isdigit():
-                return f"{ymd8[:4]}-{ymd8[4:6]}-{ymd8[6:8]}"
-            return ymd8
-        start_filter = to_hyphen(start_ymd)
-        end_filter   = to_hyphen(end_ymd)
-    else:
-        start_filter = start_ymd
-        end_filter   = end_ymd
-
-    qs = (
-        SpotfireRaw.objects
-        .filter(q)
-        .filter(yyyymmdd__gte=start_filter, yyyymmdd__lte=end_filter)
-    )
     for kw in EQP_ID_EXCLUDE_KEYWORDS:
         if kw:
             qs = qs.exclude(eqp_id__icontains=kw)
 
     qs = (
         qs.values(*RAW_COLUMNS)
-          .order_by("yyyymmdd")
+          .order_by("yyyymmdd", "act_time")
     )
 
     # SDWT_PROD_REPLACEMENTS 가 비어있으면 raw iterator 그대로,

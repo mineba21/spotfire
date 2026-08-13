@@ -8,9 +8,10 @@
  *   bar 값 = loss_time_min 합 (수평 bar, 내림차순)
  *
  * 사이드바:
- *   기간(start/end) + area(라인) / station(설비) / kind / param_type
+ *   기간(start/end, daterangepicker) + area(라인) / station(설비) / kind / param_type
  *   - 상위 필터 변경 시 하위 옵션 cascading 갱신
  *   - Apply 버튼 없이 change 즉시 재조회 (auto-apply)
+ *   - 기간 기본값: 최근 3개월 (하한 LOWER_BOUND)
  */
 
 "use strict";
@@ -30,6 +31,10 @@ const COLORS = [
 const MAX_RENDER_ROWS = 500;   // 화면 표시 상한 (전체는 Excel)
 const TOP_C_LIMIT     = 10;    // C 차트는 Top 10 만
 const UNCLASSIFIED    = "(미분류)";
+
+// 기간 필터 하한 — lossraw_service.LOSSRAW_START_YMD 와 맞춘다
+const DATE_LOWER_BOUND = "2026-01-01";
+const DATE_FMT         = "YYYY-MM-DD";
 
 // 데이터 키는 kind 이지만 화면에는 State 로 표기한다.
 const LEVEL_LABEL = { kind: "State", param_type: "Param Type", param_name: "Param Name" };
@@ -75,6 +80,10 @@ const _prevSelected = {};
 /** 차트별 마지막 렌더 내용 — 테마 전환 시 재조회 없이 다시 그리기 위함 */
 const _lastRender = {};
 
+/** 기간 필터 (moment 객체, daterangepicker 미로드 시 null) */
+let _drpStart = null;
+let _drpEnd   = null;
+
 /** 설비(station) 검색 */
 let _stationMaster   = [];
 const _stationSelected = new Set();
@@ -117,13 +126,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 기간 change → 전체 옵션 갱신 + 재조회
-  ["filterStart", "filterEnd"].forEach((id) => {
-    on(id, "change", async () => {
-      await refreshFilterOptions(-1);
-      loadA();
-    });
-  });
+  initDateFilters();   // 기간 필터는 자체 apply 핸들러에서 재조회
 
   on("stationSearch", "input", () => {
     clearTimeout(_stationSearchTimer);
@@ -150,6 +153,75 @@ function _esc(str) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/** 기본 기간 = 최근 3개월 (하한 DATE_LOWER_BOUND) ~ 오늘 */
+function _defaultRange() {
+  const today = moment();
+  const lower = moment(DATE_LOWER_BOUND);
+  let start = moment().subtract(3, "months");
+  if (start.isBefore(lower)) start = lower.clone();
+  return { start, today, lower };
+}
+
+/**
+ * 기간 필터 초기화 — start / end 각각 단일 캘린더.
+ * - autoApply: 적용 버튼 없이 날짜 클릭 즉시 반영
+ * - start 확정 시 end 캘린더를 자동으로 띄운다 (반대는 무시)
+ */
+function initDateFilters() {
+  if (typeof window.jQuery === "undefined" || typeof window.moment === "undefined") {
+    console.warn("[lossraw] jQuery/moment 미로드 — 기간 필터 없이 동작합니다");
+    return;
+  }
+
+  const { start, today, lower } = _defaultRange();
+  _drpStart = start;
+  _drpEnd   = today;
+
+  const opts = (initial, minD, maxD) => ({
+    singleDatePicker: true,
+    autoUpdateInput: true,
+    autoApply: true,                 // ← 적용 버튼 없이 클릭 즉시 반영
+    startDate: initial,
+    minDate: minD,
+    maxDate: maxD,
+    locale: { format: DATE_FMT },
+  });
+
+  $("#filterStart").daterangepicker(opts(start, lower, today));
+  $("#filterEnd").daterangepicker(opts(today, lower, today));
+  $("#filterStart").val(start.format(DATE_FMT));
+  $("#filterEnd").val(today.format(DATE_FMT));
+
+  // start 확정 → end minDate 좁히고 end 캘린더 자동 오픈
+  $("#filterStart").on("apply.daterangepicker", (ev, picker) => {
+    _drpStart = picker.startDate;
+    if (_drpEnd.isBefore(_drpStart)) _drpEnd = _drpStart.clone();
+
+    const endPicker = $("#filterEnd").data("daterangepicker");
+    endPicker.minDate = _drpStart;
+    endPicker.setStartDate(_drpEnd);
+    $("#filterEnd").val(_drpEnd.format(DATE_FMT));
+
+    refreshFilterOptions(-1);
+    loadA();
+    $("#filterEnd").click();         // ← end 캘린더 자동으로 띄우기
+  });
+
+  // end 확정 → start 는 건드리지 않음
+  $("#filterEnd").on("apply.daterangepicker", (ev, picker) => {
+    _drpEnd = picker.startDate;      // singleDatePicker 는 startDate 에 선택값
+    refreshFilterOptions(-1);
+    loadA();
+  });
+}
+
+/** 기간 파라미터(start/end)를 params 에 싣는다. */
+function _appendPeriod(params) {
+  if (_drpStart) params.append("start", _drpStart.format("YYYYMMDD"));
+  if (_drpEnd)   params.append("end",   _drpEnd.format("YYYYMMDD"));
+  return params;
+}
+
 /** ALL 이 선택되어 있으면 빈 배열 (= 전체) */
 function getSelectedValues(selectId) {
   const el = document.getElementById(selectId);
@@ -159,14 +231,11 @@ function getSelectedValues(selectId) {
   return selected;
 }
 
-/** 기간 + 5개 필터를 항상 실어 보낸다. extra 는 드릴다운 부모 값. */
+/** 기간 + 4개 필터를 항상 실어 보낸다. extra 는 드릴다운 부모 값. */
 function collectFilters(extra) {
   const params = new URLSearchParams();
 
-  const start = document.getElementById("filterStart")?.value;
-  const end   = document.getElementById("filterEnd")?.value;
-  if (start) params.append("start", start);
-  if (end)   params.append("end",   end);
+  _appendPeriod(params);
 
   FILTER_ORDER.forEach((f) => {
     getSelectedValues(f.id).forEach((v) => params.append(f.field, v));
@@ -213,10 +282,7 @@ function normalizeAll(selectId) {
 async function refreshFilterOptions(changedIdx = -1) {
   const params = new URLSearchParams();
 
-  const start = document.getElementById("filterStart")?.value;
-  const end   = document.getElementById("filterEnd")?.value;
-  if (start) params.append("start", start);
-  if (end)   params.append("end",   end);
+  _appendPeriod(params);
 
   FILTER_ORDER.forEach((f, idx) => {
     if (changedIdx >= 0 && idx > changedIdx) return;
@@ -326,13 +392,29 @@ async function resetFilters() {
   if (searchEl) searchEl.value = "";
   _stationSelected.clear();
 
-  ["filterStart", "filterEnd"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
-  });
+  _resetDateFilters();
 
   await refreshFilterOptions(-1);
   loadA();
+}
+
+/** 기간 필터를 기본값(최근 3개월)으로 되돌린다. */
+function _resetDateFilters() {
+  if (!_drpStart || typeof window.jQuery === "undefined") return;
+
+  const { start, today, lower } = _defaultRange();
+  _drpStart = start;
+  _drpEnd   = today;
+
+  const startPicker = $("#filterStart").data("daterangepicker");
+  const endPicker   = $("#filterEnd").data("daterangepicker");
+  if (startPicker) startPicker.setStartDate(start);
+  if (endPicker) {
+    endPicker.minDate = lower;
+    endPicker.setStartDate(today);
+  }
+  $("#filterStart").val(start.format(DATE_FMT));
+  $("#filterEnd").val(today.format(DATE_FMT));
 }
 
 

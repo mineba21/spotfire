@@ -196,19 +196,19 @@ TOP_MAX_N = 200
 
 
 def get_top_aggregate(flag, yyyy, flagdates, filters, group_cols, top_n=10):
-    from interlock_ai.services.detail_service import get_date_range  # 순환 import 방지
+    # 순환 import 방지
+    from interlock_ai.services.detail_service import get_date_range, normalize_fd_pairs
 
-    if isinstance(flagdates, str):
-        flagdates = [flagdates]
-    flagdates = [fd for fd in flagdates if fd]
+    # flagdates 는 (flagdate, yyyy) 쌍 리스트 권장 — bar 마다 연도가 다를 수 있다
+    fd_pairs   = normalize_fd_pairs(flagdates, yyyy)
     group_cols = [c for c in group_cols if c in TOP_ALLOWED_GROUP_COLS]
-    if not group_cols or not flagdates:
+    if not group_cols or not fd_pairs:
         return []
     top_n = max(1, min(int(top_n or 10), TOP_MAX_N))
 
     ranges = []
-    for fd in flagdates:
-        s, e = get_date_range(flag, yyyy, fd)
+    for fd, fy in fd_pairs:
+        s, e = get_date_range(flag, fy, fd)   # 쌍별 연도
         if s and e:
             ranges.append((s, e))
     if not ranges:
