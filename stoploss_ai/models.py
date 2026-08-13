@@ -18,17 +18,15 @@ StoplossReport (managed=False):
   pm, qual, bm, eng, etc, stepchg, std_time, rd, rank
 
 TpmEqpLoss (managed=False):
-  id, yyyymmdd, eqp_id(db_column="station"), area,
+  id, yyyymmdd, eqp_id, station, area,
   start_time, end_time, state, kind, param_type, param_name, loss_time_min
 
   · loss_time_min 은 적재 시 (end_time - start_time) 분으로 채워지는 DB 컬럼이다.
-    detail_service 는 아직 start/end 차이로 Python 계산한 값을 응답에 넣는다
-    (기존 동작 유지). lossraw_service 만 DB 컬럼을 Sum 으로 집계한다.
-  · "설비" 컬럼은 station 하나뿐이며 eqp_id 가 db_column="station" 으로 매핑한다.
-    같은 컬럼을 가리키는 필드를 두 개 둘 수 없어(Django models.E007) station
-    필드는 따로 만들지 않고, lossraw_service 가 eqp_id 값을 station 키로도
-    노출한다. DB 에 station 과 별개의 설비 컬럼이 실제로 존재한다면 여기에
-    필드를 추가하고 lossraw_service.STATION_FIELD 를 바꾸면 된다.
+    (파싱실패 0 / 음수 0 / 소수 1자리 규칙은 적재측에서 적용)
+    detail_service · ratio_service · lossraw_service 모두 이 컬럼을 읽는다.
+  · station(설비) 과 eqp_id 는 각각 별도 DB 컬럼이다.
+    현재는 값이 같지만 추후 서로 다른 값을 갖게 될 예정이라 필드를 분리해 둔다.
+    (StoplossReport.eqp_id 는 report_stoploss.station 컬럼 매핑 — 별개 테이블)
 """
 import os
 from django.db import models
@@ -85,9 +83,11 @@ class TpmEqpLoss(models.Model):
     - Stoploss 페이지: Bar 클릭 시에만 조회 (초기 로딩 없음)
     - Loss Raw 페이지: kind → param_type → param_name 드릴다운 집계
     - loss_time_min 은 적재 시 채워지는 DB 컬럼 (분 단위)
+    - station(설비) 과 eqp_id 는 별도 컬럼 — 추후 값이 서로 달라질 예정
     """
     yyyymmdd      = models.CharField(max_length=10,  default="")   # 숫자형 문자열
-    eqp_id        = models.CharField(max_length=100, default="", db_column="station")  # DB: station (설비)
+    eqp_id        = models.CharField(max_length=100, default="")   # DB: eqp_id
+    station       = models.CharField(max_length=100, default="")   # DB: station (설비)
     area          = models.CharField(max_length=100, default="")   # 라인
     start_time    = models.CharField(max_length=30,  default="")   # 문자열 datetime
     end_time      = models.CharField(max_length=30,  default="")   # 문자열 datetime

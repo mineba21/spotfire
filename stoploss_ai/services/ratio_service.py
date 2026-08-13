@@ -8,8 +8,8 @@ stoploss_ai/services/ratio_service.py
      → "어떤 원인(state/eqp_model/line 등)이 몇 분 정지로스를 유발했나" 분석.
 
   2. loss_time_min 은 raw event duration 합이 아니다.
-     tpm_eqp_loss 의 raw duration 을 EQP별 report_stoploss.stoploss 합에 비례 배분한
-     allocated loss minutes 이다.
+     tpm_eqp_loss.loss_time_min(적재 컬럼) 을 EQP별 report_stoploss.stoploss 합에
+     비례 배분한 allocated loss minutes 이다.
 
   3. 분자와 분모는 같은 report_stoploss scope 를 기준으로 맞춘다.
      - yyyy / flag / flagdate + sidebar filter 전체를 report_stoploss 에 먼저 적용한다.
@@ -46,7 +46,6 @@ from django.db.models import Q
 
 from stoploss_ai.models import TpmEqpLoss, StoplossReport
 from stoploss_ai.services.filter_service import build_q
-from stoploss_ai.services.detail_service import _calc_loss_min  # noqa: F401 — 공용
 from interlock_ai.services.detail_service import get_date_range
 
 logger = logging.getLogger(__name__)
@@ -153,8 +152,7 @@ def get_ratio_analysis(
     loss_rows = list(
         TpmEqpLoss.objects
         .filter(q_loss)
-        .values("eqp_id", "start_time", "end_time", "state",
-                "param_type", "param_name")
+        .values("eqp_id", "state", "param_type", "param_name", "loss_time_min")
         .order_by("yyyymmdd", "start_time")
     )
 
@@ -164,7 +162,7 @@ def get_ratio_analysis(
 
     for row in loss_rows:
         eqp_id = row["eqp_id"] or ""
-        raw_loss = _calc_loss_min(row["start_time"], row["end_time"])
+        raw_loss = row["loss_time_min"] or 0.0
         if raw_loss <= 0:
             continue
         prepared_events.append((row, raw_loss))

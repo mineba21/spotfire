@@ -6,13 +6,8 @@ loss_time_min(float 컬럼) 을 DB Sum 으로 집계 — Python 계산/캐싱 �
 
 드릴다운: kind → param_type → param_name → raw
 
-[컬럼 매핑 주의]
-  "설비" 컬럼은 DB 상 station 하나이며 모델에서는 eqp_id 가
-  db_column="station" 으로 매핑한다. 같은 컬럼에 두 개의 필드를 둘 수 없어
-  (Django models.E007) 사이드바/테이블의 station 은 STATION_FIELD 를 통해
-  eqp_id 로 변환해 조회하고, raw 응답에는 station / eqp_id 두 키로 노출한다.
-  DB 에 station 과 별개의 설비 컬럼이 존재한다면 모델에 필드를 추가하고
-  STATION_FIELD 만 바꾸면 된다.
+사이드바 필터의 "설비" 는 tpm_eqp_loss.station 컬럼이다.
+station 과 eqp_id 는 별도 컬럼이며 추후 값이 달라질 예정이라 둘 다 노출한다.
 """
 from django.db.models import Count, Q, Sum
 
@@ -29,24 +24,13 @@ LEVEL_PARENTS = {"kind": [], "param_type": ["kind"], "param_name": ["kind", "par
 
 LOSSRAW_FILTER_FIELDS = ["area", "station", "kind", "param_type"]
 
-# 사이드바/테이블의 논리 컬럼명 → 실제 모델 필드명
-STATION_FIELD = "eqp_id"
-
 RAW_COLUMNS = ["yyyymmdd", "area", "station", "eqp_id", "start_time", "end_time",
                "kind", "state", "param_type", "param_name", "loss_time_min"]
-
-# .values() 에 넘길 실제 모델 필드 (station 은 eqp_id 와 같은 컬럼이라 제외)
-RAW_QUERY_FIELDS = [c for c in RAW_COLUMNS if c != "station"]
 
 MAX_RAW_ROWS = 5000
 
 # yyyymmdd 표기 형식은 적재 규칙이라 런타임 중 바뀌지 않는다 — 1회만 조회한다.
 _ymd_hyphen_cache = None
-
-
-def _model_field(name: str) -> str:
-    """논리 컬럼명 → 모델 필드명 (station → eqp_id)."""
-    return STATION_FIELD if name == "station" else name
 
 
 def _parent_q(field: str, value: str) -> "Q":
@@ -85,7 +69,7 @@ def _apply_common_filters(qs, start=None, end=None, filters=None):
     for f in LOSSRAW_FILTER_FIELDS:
         vals = (filters or {}).get(f)
         if vals:
-            qs = qs.filter(**{f"{_model_field(f)}__in": vals})
+            qs = qs.filter(**{f"{f}__in": vals})
     return qs
 
 
@@ -94,7 +78,6 @@ def get_filter_options(start=None, end=None, constraints=None):
     qs = _apply_common_filters(qs, start, end, constraints)
 
     def _distinct(field):
-        field = _model_field(field)
         return sorted(
             v for v in qs.exclude(**{field: ""})
             .values_list(field, flat=True).distinct() if v is not None
@@ -138,12 +121,6 @@ def get_raw_rows(parents, start=None, end=None, filters=None):
     qs = _apply_common_filters(qs, start, end, filters)
     for k, v in clean.items():
         qs = qs.filter(_parent_q(k, v))
-    qs = qs.values(*RAW_QUERY_FIELDS).order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS]
-    return [_transform_raw_row(row) for row in qs]
-
-
-def _transform_raw_row(row: dict) -> dict:
-    """모델 row → 출력 dict. station 은 eqp_id 와 같은 컬럼."""
-    out = dict(row)
-    out["station"] = row.get(STATION_FIELD, "")
-    return {col: out.get(col) for col in RAW_COLUMNS}
+    qs = qs.values(*RAW_COLUMNS).order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS]
+    # 출력 순서를 RAW_COLUMNS 로 고정한다 (.values() 는 dict 순서를 보장하지 않음)
+    return [{col: row.get(col) for col in RAW_COLUMNS} for row in qs]
