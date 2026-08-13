@@ -1,0 +1,309 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>설비 Loss 분석</title>
+
+  <script>
+    (function() {
+      var saved = localStorage.getItem("sf-theme");
+      var preferred = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", saved || preferred);
+    })();
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <link rel="stylesheet" href="{% static 'stoploss_ai/css/dashboard.css' %}?v=20260619">
+  <style>
+    .sf-content       { overflow-y: auto !important; }
+    .sf-detail        { flex: none !important; overflow: visible !important; height: auto !important; }
+    #lrRawSection .sf-table-wrapper { max-height: 500px; overflow-y: auto; }
+
+    /* 드릴다운 차트는 라벨이 길어 stoploss 보다 카드를 키운다 */
+    .sf-chart-row .sf-chart-card { height: 380px; }
+    /* 선택된 단계 카드 강조 */
+    .sf-chart-card.lr-active {
+      border-color: var(--sf-primary);
+      box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+    }
+    .sf-chart-card.lr-active::before { opacity: 1; }
+
+    .lr-rawpanel-badge {
+      font-size: 11px; font-weight: 700;
+      color: var(--sf-primary); background: var(--sf-primary-soft);
+      border: 1px solid rgba(99,102,241,.3);
+      border-radius: 14px; padding: 2px 10px;
+    }
+    .lr-rawpanel-count { margin-left: auto; font-size: 11px; color: var(--sf-text-muted); }
+    .lr-date-row { display: flex; flex-direction: column; gap: 6px; }
+
+    /* Page Tab Bar */
+    .sf-pagetab-bar {
+      flex-shrink: 0;
+      height: 36px;
+      background: var(--sf-surface);
+      border-top: 1px solid var(--sf-border);
+      display: flex;
+      align-items: flex-end;
+      padding: 0 12px;
+      gap: 0;
+      box-shadow: 0 -1px 4px rgba(0,0,0,.04);
+    }
+    .sf-pagetab-list {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 100%;
+    }
+    .sf-pagetab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 14px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: inherit;
+      color: var(--sf-text-muted);
+      text-decoration: none;
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      background: transparent;
+      cursor: pointer;
+      transition: background var(--sf-transition), color var(--sf-transition),
+                  border-color var(--sf-transition);
+      white-space: nowrap;
+      position: relative;
+      bottom: -1px;
+    }
+    .sf-pagetab:hover {
+      background: var(--sf-surface-2);
+      color: var(--sf-text);
+    }
+    .sf-pagetab--active {
+      background: var(--sf-surface);
+      color: var(--sf-primary);
+      font-weight: 700;
+      border-color: var(--sf-border);
+      border-bottom-color: var(--sf-surface);
+    }
+    .sf-pagetab--active svg { stroke: var(--sf-primary); }
+  </style>
+
+  <meta name="csrf-token" content="{{ csrf_token }}">
+
+  <script>
+    window.LR_URLS = {
+      agg           : "{% url 'stoploss_ai:api_lossraw_agg' %}",
+      raw           : "{% url 'stoploss_ai:api_lossraw_raw' %}",
+      filterOptions : "{% url 'stoploss_ai:api_lossraw_filter_options' %}",
+    };
+  </script>
+</head>
+
+<body class="sf-body">
+<div class="sf-layout" id="sfLayout">
+
+  <aside class="sf-sidebar" id="sfSidebar">
+
+    <div class="sf-sidebar__header">
+      <div class="sf-sidebar__brand">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity=".7">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+        </svg>
+        <span class="sf-sidebar__title">Filters</span>
+      </div>
+      <button class="sf-sidebar__collapse-btn" id="sidebarCollapseBtn" title="접기">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    </div>
+
+    <!-- 기간 -->
+    <div class="sf-sidebar__section">
+      <span class="sf-sidebar__section-label">기간</span>
+      <div class="lr-date-row">
+        <input type="date" id="filterStart" class="sf-rank-item__input" style="text-align:left;">
+        <input type="date" id="filterEnd"   class="sf-rank-item__input" style="text-align:left;">
+      </div>
+    </div>
+
+    <!-- 라인 (area) -->
+    <div class="sf-sidebar__section">
+      <label class="sf-sidebar__section-label" for="filterArea">라인</label>
+      <select id="filterArea" name="area" multiple class="sf-select">
+        <option value="ALL" selected>ALL</option>
+        {% for v in filter_options.areas %}
+          <option value="{{ v }}">{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- 설비 (station) -->
+    <div class="sf-sidebar__section">
+      <label class="sf-sidebar__section-label" for="filterStation">설비</label>
+      <input type="text" id="stationSearch" class="sf-rank-item__input"
+             placeholder="🔍 검색…" autocomplete="off"
+             style="width:100%; text-align:left; margin-bottom:6px;">
+      <select id="filterStation" name="station" multiple class="sf-select">
+        <option value="ALL" selected>ALL</option>
+        {% for v in filter_options.stations %}
+          <option value="{{ v }}">{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Kind -->
+    <div class="sf-sidebar__section">
+      <label class="sf-sidebar__section-label" for="filterKind">Kind</label>
+      <select id="filterKind" name="kind" multiple class="sf-select">
+        <option value="ALL" selected>ALL</option>
+        {% for v in filter_options.kinds %}
+          <option value="{{ v }}">{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Param Type -->
+    <div class="sf-sidebar__section">
+      <label class="sf-sidebar__section-label" for="filterParamType">Param Type</label>
+      <select id="filterParamType" name="param_type" multiple class="sf-select">
+        <option value="ALL" selected>ALL</option>
+        {% for v in filter_options.param_types %}
+          <option value="{{ v }}">{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Buttons (변경 즉시 재조회 — Apply 없음) -->
+    <div class="sf-sidebar__footer">
+      <button id="resetFilterBtn" class="sf-btn sf-btn--ghost">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.33"/></svg>
+        Reset
+      </button>
+    </div>
+
+  </aside>
+
+  <main class="sf-main" id="sfMain">
+
+    <header class="sf-topbar">
+      <div class="sf-topbar__left">
+        <button class="sf-topbar__menu-btn" id="sidebarToggleBtn" title="sidebar 열기/닫기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="sf-topbar__brand">
+          <span class="sf-topbar__logo">⬡</span>
+          <h1 class="sf-topbar__title">설비 Loss 분석</h1>
+        </div>
+      </div>
+      <div class="sf-topbar__right">
+        <button class="sf-theme-btn" id="themeToggleBtn" title="테마 전환">
+          <svg class="sf-theme-btn__icon sf-theme-btn__icon--moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <svg class="sf-theme-btn__icon sf-theme-btn__icon--sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="sf-content">
+
+      <section class="sf-chart-row">
+        <div class="sf-chart-card" id="cardA">
+          <div class="sf-chart-card__header">
+            <span class="sf-chart-card__badge sf-chart-card__badge--m">A</span>
+            <span class="sf-chart-card__title" id="titleA">State 별 Loss (min)</span>
+          </div>
+          <div id="chartA" class="sf-chart-canvas"></div>
+          <div class="sf-chart-card__loading" id="loadingA" style="display:none;"><div class="sf-spinner"></div></div>
+        </div>
+        <div class="sf-chart-card" id="cardB">
+          <div class="sf-chart-card__header">
+            <span class="sf-chart-card__badge sf-chart-card__badge--w">B</span>
+            <span class="sf-chart-card__title" id="titleB">Param Type 별 Loss (min)</span>
+          </div>
+          <div id="chartB" class="sf-chart-canvas"></div>
+          <div class="sf-chart-card__loading" id="loadingB" style="display:none;"><div class="sf-spinner"></div></div>
+        </div>
+        <div class="sf-chart-card" id="cardC">
+          <div class="sf-chart-card__header">
+            <span class="sf-chart-card__badge sf-chart-card__badge--d">C</span>
+            <span class="sf-chart-card__title" id="titleC">Param Name 별 Loss (min)</span>
+          </div>
+          <div id="chartC" class="sf-chart-canvas"></div>
+          <div class="sf-chart-card__loading" id="loadingC" style="display:none;"><div class="sf-spinner"></div></div>
+        </div>
+      </section>
+
+      <section class="sf-detail" id="lrRawSection" style="display:none;">
+        <div class="sf-rawpanel-header">
+          <span class="sf-rawpanel-header__title">Raw Data</span>
+          <span class="lr-rawpanel-badge" id="lrRawBadge"></span>
+          <span class="lr-rawpanel-count" id="lrRawCount"></span>
+          <button class="sf-excel-btn" id="lrRawExcelBtn" title="Excel 다운로드">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="16" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            Excel
+          </button>
+        </div>
+        <div class="sf-table-wrapper">
+          <table class="sf-table" id="lrRawTable">
+            <thead id="lrRawTableHead"></thead>
+            <tbody id="lrRawTableBody"></tbody>
+          </table>
+          <div class="sf-table-empty" id="lrRawTableEmpty" style="display:none;">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+              <path d="M3 3h18v18H3z"/><path d="M9 9h6m-6 3h6m-6 3h4"/>
+            </svg>
+            <p>데이터가 없습니다</p>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /sf-content -->
+
+    <!-- 하단 Page Tab Bar -->
+    <nav class="sf-pagetab-bar" id="sfPageTabBar">
+      <div class="sf-pagetab-list">
+        <a href="{% url 'interlock_ai:index' %}" class="sf-pagetab">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Interlock
+        </a>
+        <a href="{% url 'stoploss_ai:index' %}" class="sf-pagetab">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+          Stoploss
+        </a>
+        <a href="{% url 'stoploss_ai:lossraw_index' %}" class="sf-pagetab sf-pagetab--active">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="13" y="8" width="3" height="10"/></svg>
+          Loss Raw
+        </a>
+      </div>
+    </nav>
+
+  </main>
+
+</div>
+
+<div class="sf-toast" id="sfToast" role="alert" aria-live="assertive"></div>
+
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="{% static 'stoploss_ai/js/lossraw.js' %}?v=20260619"></script>
+</body>
+</html>

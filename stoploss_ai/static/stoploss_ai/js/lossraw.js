@@ -1,0 +1,711 @@
+/**
+ * stoploss_ai/lossraw.js
+ *
+ * 역할: 설비 Loss 분석(tpm_eqp_loss 드릴다운) 페이지의 모든 클라이언트 로직
+ *
+ * 드릴다운:
+ *   A(kind, 화면 표기는 State) → B(param_type) → C(param_name, Top10) → raw table
+ *   bar 값 = loss_time_min 합 (수평 bar, 내림차순)
+ *
+ * 사이드바:
+ *   기간(start/end) + area(라인) / station(설비) / kind / param_type
+ *   - 상위 필터 변경 시 하위 옵션 cascading 갱신
+ *   - Apply 버튼 없이 change 즉시 재조회 (auto-apply)
+ */
+
+"use strict";
+
+// ═══════════════════════════════════════════════════════════════
+// 1. 상수
+// ═══════════════════════════════════════════════════════════════
+
+const URLS      = window.LR_URLS || {};
+const ALL_VALUE = "ALL";
+const COLORS = [
+  "#6366f1", "#06b6d4", "#10b981", "#f59e0b",
+  "#ef4444", "#8b5cf6", "#ec4899", "#3b82f6",
+  "#14b8a6", "#f97316",
+];
+
+const MAX_RENDER_ROWS = 500;   // 화면 표시 상한 (전체는 Excel)
+const TOP_C_LIMIT     = 10;    // C 차트는 Top 10 만
+const UNCLASSIFIED    = "(미분류)";
+
+// 데이터 키는 kind 이지만 화면에는 State 로 표기한다.
+const LEVEL_LABEL = { kind: "State", param_type: "Param Type", param_name: "Param Name" };
+
+const COL_LABELS = {
+  yyyymmdd:      "Date",
+  area:          "라인",
+  station:       "설비",
+  eqp_id:        "EQP ID",
+  start_time:    "Start",
+  end_time:      "End",
+  kind:          "State",
+  state:         "State Detail",
+  param_type:    "Param Type",
+  param_name:    "Param Name",
+  loss_time_min: "Loss (min)",
+};
+const NUMERIC_COLS = new Set(["loss_time_min"]);
+
+// cascading 순서 = 배열 순서 (상위 → 하위)
+const FILTER_ORDER = [
+  { id: "filterArea",      field: "area",       dataKey: "areas"       },
+  { id: "filterStation",   field: "station",    dataKey: "stations"    },
+  { id: "filterKind",      field: "kind",       dataKey: "kinds"       },
+  { id: "filterParamType", field: "param_type", dataKey: "param_types" },
+];
+
+
+// ═══════════════════════════════════════════════════════════════
+// 2. state
+// ═══════════════════════════════════════════════════════════════
+
+/** 현재 드릴다운 선택 (null = 미선택) */
+const sel = { kind: null, param_type: null, param_name: null };
+
+let _rawRows = [];
+let _rawCols = [];
+let _rawBadge = "";
+
+/** select 별 직전 선택 상태 — ALL ↔ 개별값 전환 의도 판별용 */
+const _prevSelected = {};
+
+/** 차트별 마지막 렌더 내용 — 테마 전환 시 재조회 없이 다시 그리기 위함 */
+const _lastRender = {};
+
+/** 설비(station) 검색 */
+let _stationMaster   = [];
+const _stationSelected = new Set();
+let _stationSearchTimer = null;
+
+
+// ═══════════════════════════════════════════════════════════════
+// 3. 초기화
+// ═══════════════════════════════════════════════════════════════
+
+document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
+
+  FILTER_ORDER.forEach((f) => {
+    _prevSelected[f.id] = new Set(
+      Array.from(document.getElementById(f.id)?.selectedOptions || []).map((o) => o.value)
+    );
+  });
+
+  const stationEl = document.getElementById("filterStation");
+  if (stationEl) {
+    _stationMaster = Array.from(stationEl.options)
+      .map((o) => o.value).filter((v) => v !== ALL_VALUE);
+  }
+  _syncStationSelected();
+
+  function on(id, event, handler) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, handler);
+    else console.warn(`[lossraw] element not found: #${id}`);
+  }
+
+  // 필터 change → 정규화 + 하위 옵션 갱신 + 즉시 재조회
+  FILTER_ORDER.forEach((f, idx) => {
+    on(f.id, "change", async () => {
+      normalizeAll(f.id);
+      if (f.id === "filterStation") _syncStationSelected();
+      await refreshFilterOptions(idx);
+      loadA();
+    });
+  });
+
+  // 기간 change → 전체 옵션 갱신 + 재조회
+  ["filterStart", "filterEnd"].forEach((id) => {
+    on(id, "change", async () => {
+      await refreshFilterOptions(-1);
+      loadA();
+    });
+  });
+
+  on("stationSearch", "input", () => {
+    clearTimeout(_stationSearchTimer);
+    _stationSearchTimer = setTimeout(_applyStationSearch, 200);
+  });
+
+  on("resetFilterBtn",     "click", resetFilters);
+  on("lrRawExcelBtn",      "click", downloadRawExcel);
+  on("sidebarCollapseBtn", "click", () => toggleSidebar(false));
+  on("sidebarToggleBtn",   "click", () => toggleSidebar(true));
+  on("themeToggleBtn",     "click", toggleTheme);
+
+  loadA();
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// 4. 필터 수집 / cascading
+// ═══════════════════════════════════════════════════════════════
+
+function _esc(str) {
+  return String(str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/** ALL 이 선택되어 있으면 빈 배열 (= 전체) */
+function getSelectedValues(selectId) {
+  const el = document.getElementById(selectId);
+  if (!el) return [];
+  const selected = Array.from(el.selectedOptions).map((o) => o.value);
+  if (!selected.length || selected.includes(ALL_VALUE)) return [];
+  return selected;
+}
+
+/** 기간 + 5개 필터를 항상 실어 보낸다. extra 는 드릴다운 부모 값. */
+function collectFilters(extra) {
+  const params = new URLSearchParams();
+
+  const start = document.getElementById("filterStart")?.value;
+  const end   = document.getElementById("filterEnd")?.value;
+  if (start) params.append("start", start);
+  if (end)   params.append("end",   end);
+
+  FILTER_ORDER.forEach((f) => {
+    getSelectedValues(f.id).forEach((v) => params.append(f.field, v));
+  });
+
+  Object.entries(extra || {}).forEach(([k, v]) => {
+    if (v != null && v !== "") params.append(k, v);
+  });
+
+  return params;
+}
+
+/**
+ * ALL + 개별값 동시선택 정리.
+ * 방금 ALL 을 눌렀으면 ALL 만, 개별값을 눌렀으면 ALL 을 뗀다.
+ * 아무것도 없으면 ALL.
+ */
+function normalizeAll(selectId) {
+  const el = document.getElementById(selectId);
+  if (!el) return;
+
+  const prev = _prevSelected[selectId] || new Set([ALL_VALUE]);
+  const now  = new Set(Array.from(el.selectedOptions).map((o) => o.value));
+
+  if (!now.size) {
+    now.add(ALL_VALUE);
+  } else if (now.has(ALL_VALUE) && now.size > 1) {
+    if (!prev.has(ALL_VALUE)) {
+      now.clear();
+      now.add(ALL_VALUE);
+    } else {
+      now.delete(ALL_VALUE);
+    }
+  }
+
+  Array.from(el.options).forEach((o) => { o.selected = now.has(o.value); });
+  _prevSelected[selectId] = now;
+}
+
+/**
+ * 하위 필터 옵션 재구성 (top-down cascading).
+ * @param {number} changedIdx 변경된 필터 인덱스. -1 이면 전체 재구성.
+ */
+async function refreshFilterOptions(changedIdx = -1) {
+  const params = new URLSearchParams();
+
+  const start = document.getElementById("filterStart")?.value;
+  const end   = document.getElementById("filterEnd")?.value;
+  if (start) params.append("start", start);
+  if (end)   params.append("end",   end);
+
+  FILTER_ORDER.forEach((f, idx) => {
+    if (changedIdx >= 0 && idx > changedIdx) return;
+    getSelectedValues(f.id).forEach((v) => params.append(f.field, v));
+  });
+
+  let data;
+  try {
+    const res = await fetch(`${URLS.filterOptions}?${params.toString()}`);
+    if (!res.ok) return;
+    const json = await res.json();
+    if (!json.ok) return;
+    data = json.data;
+  } catch {
+    return;
+  }
+
+  FILTER_ORDER.forEach((f, idx) => {
+    if (changedIdx < 0 || idx > changedIdx) {
+      rebuildSelect(f.id, data[f.dataKey] || []);
+    }
+  });
+}
+
+/** 옵션 교체 + 기존 선택 보존 (없으면 ALL). station 은 검색 master 도 갱신. */
+function rebuildSelect(selectId, newValues) {
+  const el = document.getElementById(selectId);
+  if (!el || !Array.isArray(newValues)) return;
+
+  if (selectId === "filterStation") {
+    _stationMaster = newValues.slice();
+    // 새 옵션 목록에 없는 선택값은 버린다
+    Array.from(_stationSelected).forEach((v) => {
+      if (!_stationMaster.includes(v)) _stationSelected.delete(v);
+    });
+    _applyStationSearch();   // 검색어 + 선택 상태를 반영해 재구성
+    return;
+  }
+
+  const prevSelected = new Set(
+    Array.from(el.selectedOptions).map((o) => o.value).filter((v) => v !== ALL_VALUE)
+  );
+
+  el.innerHTML = `<option value="${ALL_VALUE}">ALL</option>` +
+    newValues.map((v) => `<option value="${_esc(v)}">${_esc(v)}</option>`).join("");
+
+  let restored = 0;
+  Array.from(el.options).forEach((o) => {
+    if (prevSelected.has(o.value)) { o.selected = true; restored++; }
+  });
+  if (restored === 0) el.options[0].selected = true;
+
+  _prevSelected[selectId] = new Set(
+    Array.from(el.selectedOptions).map((o) => o.value)
+  );
+}
+
+/** 검색어 부분일치 + 이미 선택된 항목으로 #filterStation 옵션 재구성. */
+function _applyStationSearch() {
+  const el = document.getElementById("filterStation");
+  if (!el) return;
+
+  const term = (document.getElementById("stationSearch")?.value || "")
+    .trim().toLowerCase();
+
+  const visible = _stationMaster.filter((v) =>
+    (!term || String(v).toLowerCase().includes(term)) || _stationSelected.has(v)
+  );
+
+  el.innerHTML = `<option value="${ALL_VALUE}">ALL</option>` +
+    visible.map((v) => `<option value="${_esc(v)}">${_esc(v)}</option>`).join("");
+
+  let restored = 0;
+  Array.from(el.options).forEach((o) => {
+    if (o.value !== ALL_VALUE && _stationSelected.has(o.value)) {
+      o.selected = true;
+      restored++;
+    }
+  });
+  if (restored === 0) el.options[0].selected = true;
+
+  _prevSelected["filterStation"] = new Set(
+    Array.from(el.selectedOptions).map((o) => o.value)
+  );
+}
+
+/** select 선택 → 검색과 무관하게 유지되는 Set 동기화 (ALL 이면 clear). */
+function _syncStationSelected() {
+  const el = document.getElementById("filterStation");
+  if (!el) return;
+  const selected = Array.from(el.selectedOptions).map((o) => o.value);
+  _stationSelected.clear();
+  if (!selected.includes(ALL_VALUE)) {
+    selected.forEach((v) => _stationSelected.add(v));
+  }
+}
+
+async function resetFilters() {
+  FILTER_ORDER.forEach((f) => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    Array.from(el.options).forEach((o) => { o.selected = (o.value === ALL_VALUE); });
+    _prevSelected[f.id] = new Set([ALL_VALUE]);
+  });
+
+  const searchEl = document.getElementById("stationSearch");
+  if (searchEl) searchEl.value = "";
+  _stationSelected.clear();
+
+  ["filterStart", "filterEnd"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+
+  await refreshFilterOptions(-1);
+  loadA();
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 5. 데이터 조회
+// ═══════════════════════════════════════════════════════════════
+
+async function fetchAgg(level, parents) {
+  const params = collectFilters(parents);
+  params.append("level", level);
+  try {
+    const res  = await fetch(`${URLS.agg}?${params.toString()}`);
+    const json = await res.json();
+    if (!json.ok) { showToast(`API 오류: ${json.error}`); return []; }
+    return json.data.rows || [];
+  } catch (err) {
+    showToast(`네트워크 오류: ${err.message}`);
+    return [];
+  }
+}
+
+async function fetchRaw(parents) {
+  const params = collectFilters(parents);
+  try {
+    const res  = await fetch(`${URLS.raw}?${params.toString()}`);
+    const json = await res.json();
+    if (!json.ok) { showToast(`API 오류: ${json.error}`); return null; }
+    return json.data;
+  } catch (err) {
+    showToast(`네트워크 오류: ${err.message}`);
+    return null;
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 6. 드릴다운 (A → B → C → raw)
+// ═══════════════════════════════════════════════════════════════
+
+async function loadA() {
+  sel.kind = null;
+  sel.param_type = null;
+  sel.param_name = null;
+  setActive(null);
+
+  setChartLoading("A", true);
+  const rows = await fetchAgg("kind", {});
+  setChartLoading("A", false);
+
+  setTitle("titleA", `${LEVEL_LABEL.kind} 별 Loss (min)`);
+  renderBar("chartA", "kind", rows, onClickA);
+
+  setTitle("titleB", `${LEVEL_LABEL.param_type} 별 Loss (min)`);
+  setTitle("titleC", `${LEVEL_LABEL.param_name} 별 Loss (min)`);
+  clearChart("chartB", "상위 bar 를 선택하세요");
+  clearChart("chartC", "상위 bar 를 선택하세요");
+  hideRaw();
+}
+
+async function onClickA(label) {
+  sel.kind = label;
+  sel.param_type = null;
+  sel.param_name = null;
+  setActive("A");
+
+  setChartLoading("B", true);
+  const rows = await fetchAgg("param_type", { kind: sel.kind });
+  setChartLoading("B", false);
+
+  setTitle("titleB", `${label} · ${LEVEL_LABEL.param_type} 별 Loss (min)`);
+  renderBar("chartB", "param_type", rows, onClickB);
+
+  setTitle("titleC", `${LEVEL_LABEL.param_name} 별 Loss (min)`);
+  clearChart("chartC", "상위 bar 를 선택하세요");
+  hideRaw();
+}
+
+async function onClickB(label) {
+  sel.param_type = label;
+  sel.param_name = null;
+  setActive("B");
+
+  setChartLoading("C", true);
+  const rows = await fetchAgg("param_name", { kind: sel.kind, param_type: sel.param_type });
+  setChartLoading("C", false);
+
+  setTitle("titleC", `${label} · ${LEVEL_LABEL.param_name} Top ${TOP_C_LIMIT} (min)`);
+  renderBar("chartC", "param_name", rows.slice(0, TOP_C_LIMIT), onClickC);
+  hideRaw();
+}
+
+async function onClickC(label) {
+  sel.param_name = label;
+  setActive("C");
+
+  const data = await fetchRaw({
+    kind:       sel.kind,
+    param_type: sel.param_type,
+    param_name: sel.param_name,
+  });
+  if (!data) return;
+
+  const badge = [sel.kind, sel.param_type, sel.param_name]
+    .filter(Boolean).join(" / ");
+  renderRaw(data.rows || [], data.columns || [], badge);
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 7. 차트 렌더링
+// ═══════════════════════════════════════════════════════════════
+
+function _chartFont() {
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  return isDark ? "#94a3b8" : "#64748b";
+}
+
+/**
+ * 수평 bar (x = loss_time_min, 내림차순). bar 클릭 시 onClick(label) 호출.
+ * label 은 서버가 준 값 그대로 — 빈 값 그룹은 "(미분류)" 로 오고,
+ * 그대로 되돌려 보내면 서버가 다시 빈 값 조건으로 해석한다.
+ */
+function renderBar(divId, level, rows, onClick) {
+  const el = document.getElementById(divId);
+  if (!el) return;
+
+  if (!rows || !rows.length) {
+    clearChart(divId, "데이터 없음");
+    return;
+  }
+
+  _lastRender[divId] = { level, rows, onClick };
+
+  const labels = rows.map((r) => r[level] || UNCLASSIFIED);
+  const values = rows.map((r) => Number(r.loss_time_min) || 0);
+  const fontColor = _chartFont();
+
+  const traces = [{
+    type: "bar", orientation: "h",
+    x: values, y: labels,
+    marker: { color: labels.map((_, i) => COLORS[i % COLORS.length]) },
+    text: values.map((v) => v.toLocaleString(undefined, { maximumFractionDigits: 1 })),
+    textposition: "auto",
+    customdata: rows.map((r) => r.cnt || 0),
+    hovertemplate: "<b>%{y}</b><br>Loss: %{x:,.1f} min<br>건수: %{customdata:,}<extra></extra>",
+  }];
+
+  const layout = {
+    margin: { t: 8, b: 34, l: 130, r: 40 },
+    xaxis: { title: { text: "Loss (min)", font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis: { automargin: true, fixedrange: true, autorange: "reversed" },
+    plot_bgcolor: "transparent", paper_bgcolor: "transparent",
+    font: { family: "Inter, sans-serif", size: 11, color: fontColor },
+    hoverlabel: { bgcolor: "#0f172a", font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
+  };
+
+  Plotly.react(divId, traces, layout, { responsive: true, displayModeBar: false });
+
+  if (typeof el.removeAllListeners === "function") el.removeAllListeners("plotly_click");
+  el.on("plotly_click", (eventData) => {
+    if (!eventData?.points?.length) return;
+    const row = rows[eventData.points[0].pointIndex];
+    if (row && typeof onClick === "function") onClick(row[level] || UNCLASSIFIED);
+  });
+}
+
+function clearChart(divId, message) {
+  const el = document.getElementById(divId);
+  if (!el) return;
+  _lastRender[divId] = { message };
+  if (typeof el.removeAllListeners === "function") el.removeAllListeners("plotly_click");
+  Plotly.react(divId, [], {
+    annotations: [{
+      text: message, xref: "paper", yref: "paper",
+      x: 0.5, y: 0.5, showarrow: false, font: { color: "#999", size: 13 },
+    }],
+    margin: { t: 10, b: 20, l: 20, r: 10 },
+    xaxis: { visible: false }, yaxis: { visible: false },
+    plot_bgcolor: "transparent", paper_bgcolor: "transparent",
+  }, { displayModeBar: false });
+}
+
+function setTitle(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function setChartLoading(which, isLoading) {
+  const el = document.getElementById(`loading${which}`);
+  if (el) el.style.display = isLoading ? "flex" : "none";
+}
+
+/** 선택된 단계 카드에 테두리 강조. which = "A" | "B" | "C" | null */
+function setActive(which) {
+  ["A", "B", "C"].forEach((k) => {
+    const card = document.getElementById(`card${k}`);
+    if (card) card.classList.toggle("lr-active", k === which);
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 8. Raw 테이블
+// ═══════════════════════════════════════════════════════════════
+
+function renderRaw(rows, columns, badgeText) {
+  const section = document.getElementById("lrRawSection");
+  const thead   = document.getElementById("lrRawTableHead");
+  const tbody   = document.getElementById("lrRawTableBody");
+  const emptyEl = document.getElementById("lrRawTableEmpty");
+  const badgeEl = document.getElementById("lrRawBadge");
+  const countEl = document.getElementById("lrRawCount");
+  if (!section || !thead || !tbody) return;
+
+  _rawRows  = rows || [];
+  _rawCols  = (columns && columns.length) ? columns
+            : (_rawRows.length ? Object.keys(_rawRows[0]) : []);
+  _rawBadge = badgeText || "";
+
+  section.style.display = "block";
+  if (badgeEl) badgeEl.textContent = _rawBadge;
+  if (countEl) countEl.textContent = `${_rawRows.length.toLocaleString()}건`;
+
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  if (!_rawRows.length) {
+    if (emptyEl) emptyEl.style.display = "block";
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = "none";
+
+  const headerRow = document.createElement("tr");
+  _rawCols.forEach((col) => {
+    const th    = document.createElement("th");
+    const label = COL_LABELS[col] || col;
+    th.textContent = label;
+    th.title       = label;
+    if (NUMERIC_COLS.has(col)) th.style.textAlign = "right";
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+
+  const fragment = document.createDocumentFragment();
+  _rawRows.slice(0, MAX_RENDER_ROWS).forEach((row) => {
+    const tr = document.createElement("tr");
+    _rawCols.forEach((col) => {
+      const td  = document.createElement("td");
+      const val = row[col];
+      if (NUMERIC_COLS.has(col)) {
+        td.style.textAlign = "right";
+        td.textContent = (val != null)
+          ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 1 })
+          : "-";
+      } else {
+        td.textContent = (val != null && val !== "") ? val : "-";
+      }
+      tr.appendChild(td);
+    });
+    fragment.appendChild(tr);
+  });
+  tbody.appendChild(fragment);
+
+  if (_rawRows.length > MAX_RENDER_ROWS) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan     = _rawCols.length;
+    td.className   = "sf-table-truncate-msg";
+    td.textContent =
+      `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${_rawRows.length.toLocaleString()}건) — 전체는 Excel 다운로드`;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+function hideRaw() {
+  const section = document.getElementById("lrRawSection");
+  if (section) section.style.display = "none";
+  _rawRows  = [];
+  _rawCols  = [];
+  _rawBadge = "";
+}
+
+function downloadRawExcel() {
+  if (!_rawRows.length) { showToast("다운로드할 데이터가 없습니다."); return; }
+  if (typeof XLSX === "undefined") {
+    showToast("Excel 라이브러리 로드 중입니다. 잠시 후 다시 시도해 주세요.");
+    return;
+  }
+
+  const btn  = document.getElementById("lrRawExcelBtn");
+  const orig = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = "저장 중…"; }
+
+  try {
+    const cols      = _rawCols.length ? _rawCols : Object.keys(_rawRows[0]);
+    const sheetData = [
+      cols.map((c) => COL_LABELS[c] || c),
+      ..._rawRows.map((row) => cols.map((c) => row[c] ?? "")),
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    ws["!cols"] = cols.map((col) => {
+      const maxLen = Math.max(
+        String(COL_LABELS[col] || col).length,
+        ..._rawRows.slice(0, 200).map((r) => String(r[col] ?? "").length)
+      );
+      return { wch: Math.min(maxLen + 2, 40) };
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "LossRaw");
+
+    const now = new Date();
+    const ts  = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}` +
+                `${String(now.getDate()).padStart(2, "0")}_` +
+                `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    const label    = _rawBadge.replace(/[^\w가-힣]+/g, "_").replace(/^_|_$/g, "");
+    const fileName = `lossraw_${label || "all"}_${ts}.xlsx`;
+
+    XLSX.writeFile(wb, fileName, { bookType: "xlsx" });
+    showToast(`📥 ${fileName} 다운로드 완료!`);
+  } catch (err) {
+    console.error("[downloadRawExcel]", err);
+    showToast(`Excel 저장 실패: ${err.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 9. 테마 / 사이드바 / 토스트
+// ═══════════════════════════════════════════════════════════════
+
+function initTheme() {
+  const saved     = localStorage.getItem("sf-theme");
+  const preferred = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  _applyTheme(saved || preferred);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  _applyTheme(current === "dark" ? "light" : "dark");
+
+  // 폰트 색이 테마에 묶여 있어 다시 그린다 (드릴다운 선택은 유지)
+  ["chartA", "chartB", "chartC"].forEach((divId) => {
+    const last = _lastRender[divId];
+    if (!last) return;
+    if (last.rows) renderBar(divId, last.level, last.rows, last.onClick);
+    else           clearChart(divId, last.message);
+  });
+}
+
+function _applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("sf-theme", theme);
+}
+
+function toggleSidebar(open) {
+  const sidebar = document.getElementById("sfSidebar");
+  const main    = document.getElementById("sfMain");
+  if (sidebar) sidebar.classList.toggle("sf-sidebar--collapsed", !open);
+  if (main)    main.classList.toggle("sf-main--full", !open);
+}
+
+let _toastTimer = null;
+
+function showToast(message, duration = 4000) {
+  const el = document.getElementById("sfToast");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add("sf-toast--show");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("sf-toast--show"), duration);
+}
