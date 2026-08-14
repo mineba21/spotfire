@@ -73,6 +73,10 @@ const sel = { kind: null, param_type: null, param_name: null };
 let _rawRows = [];
 let _rawCols = [];
 let _rawBadge = "";
+/** 서버 조회 상한(MAX_RAW_ROWS)에 걸렸는지 — 표시/Excel 문구를 정직하게 유지 */
+let _rawTotal     = 0;
+let _rawTruncated = false;
+let _rawMaxRows   = 0;
 
 /** select 별 직전 선택 상태 — ALL ↔ 개별값 전환 의도 판별용 */
 const _prevSelected = {};
@@ -276,35 +280,56 @@ function normalizeAll(selectId) {
 }
 
 /**
- * 하위 필터 옵션 재구성 (top-down cascading).
- * @param {number} changedIdx 변경된 필터 인덱스. -1 이면 전체 재구성.
+ * 기간 + FILTER_ORDER[0..upToIdx] 선택값을 제약으로 옵션 목록을 조회한다.
+ * upToIdx = -1 이면 기간만 제약 (최상위 필터용).
  */
-async function refreshFilterOptions(changedIdx = -1) {
+async function _fetchFilterOptions(upToIdx) {
   const params = new URLSearchParams();
-
   _appendPeriod(params);
 
   FILTER_ORDER.forEach((f, idx) => {
-    if (changedIdx >= 0 && idx > changedIdx) return;
+    if (idx > upToIdx) return;
     getSelectedValues(f.id).forEach((v) => params.append(f.field, v));
   });
 
-  let data;
   try {
     const res = await fetch(`${URLS.filterOptions}?${params.toString()}`);
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const json = await res.json();
-    if (!json.ok) return;
-    data = json.data;
+    return json.ok ? json.data : null;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * 필터 옵션 재구성 (top-down cascading).
+ *
+ * @param {number} changedIdx 변경된 필터 인덱스. -1 이면 전체 재구성.
+ *
+ * 각 필터의 옵션은 "자기보다 상위인 필터" 로만 제약해야 한다.
+ * 전체 재구성 때 모든 선택값을 제약으로 걸면 예컨대 라인 A1 선택 상태에서
+ * 라인 옵션이 A1 하나만 남아, 기간만 바꿔도 다른 라인으로 못 옮기게 된다.
+ * 그래서 전체 재구성은 단계별로 조회한다.
+ */
+async function refreshFilterOptions(changedIdx = -1) {
+  if (changedIdx >= 0) {
+    // 변경된 필터까지를 제약으로 한 번만 조회 → 그 아래 필터만 재구성
+    const data = await _fetchFilterOptions(changedIdx);
+    if (!data) return;
+    FILTER_ORDER.forEach((f, idx) => {
+      if (idx > changedIdx) rebuildSelect(f.id, data[f.dataKey] || []);
+    });
     return;
   }
 
-  FILTER_ORDER.forEach((f, idx) => {
-    if (changedIdx < 0 || idx > changedIdx) {
-      rebuildSelect(f.id, data[f.dataKey] || []);
-    }
-  });
+  // 전체 재구성: 필터마다 자기 상위 필터만 제약으로 걸어 순차 조회
+  for (let idx = 0; idx < FILTER_ORDER.length; idx++) {
+    const data = await _fetchFilterOptions(idx - 1);
+    if (!data) continue;
+    const f = FILTER_ORDER[idx];
+    rebuildSelect(f.id, data[f.dataKey] || []);
+  }
 }
 
 /** 옵션 교체 + 기존 선택 보존 (없으면 ALL). eqp_id 는 검색 master 도 갱신. */
@@ -520,7 +545,11 @@ async function onClickC(label) {
 
   const badge = [sel.kind, sel.param_type, sel.param_name]
     .filter(Boolean).join(" / ");
-  renderRaw(data.rows || [], data.columns || [], badge);
+  renderRaw(data.rows || [], data.columns || [], badge, {
+    total:     data.total,
+    truncated: !!data.truncated,
+    maxRows:   data.max_rows,
+  });
 }
 
 
@@ -621,7 +650,7 @@ function setActive(which) {
 // 8. Raw 테이블
 // ═══════════════════════════════════════════════════════════════
 
-function renderRaw(rows, columns, badgeText) {
+function renderRaw(rows, columns, badgeText, meta) {
   const section = document.getElementById("lrRawSection");
   const thead   = document.getElementById("lrRawTableHead");
   const tbody   = document.getElementById("lrRawTableBody");
@@ -634,10 +663,21 @@ function renderRaw(rows, columns, badgeText) {
   _rawCols  = (columns && columns.length) ? columns
             : (_rawRows.length ? Object.keys(_rawRows[0]) : []);
   _rawBadge = badgeText || "";
+  // 서버가 MAX_RAW_ROWS 로 자를 수 있으므로 실제 건수를 함께 받는다
+  _rawTotal     = (meta && meta.total != null) ? meta.total : _rawRows.length;
+  _rawTruncated = !!(meta && meta.truncated);
+  _rawMaxRows   = (meta && meta.maxRows) || _rawRows.length;
 
   section.style.display = "block";
   if (badgeEl) badgeEl.textContent = _rawBadge;
-  if (countEl) countEl.textContent = `${_rawRows.length.toLocaleString()}건`;
+  if (countEl) {
+    countEl.textContent = _rawTruncated
+      ? `${_rawRows.length.toLocaleString()}건 / 전체 ${_rawTotal.toLocaleString()}건 (상한 초과)`
+      : `${_rawRows.length.toLocaleString()}건`;
+    countEl.title = _rawTruncated
+      ? `조회 상한 ${_rawMaxRows.toLocaleString()}건을 넘어 일부만 불러왔습니다. 기간·필터를 좁혀 주세요.`
+      : "";
+  }
 
   thead.innerHTML = "";
   tbody.innerHTML = "";
@@ -679,13 +719,17 @@ function renderRaw(rows, columns, badgeText) {
   });
   tbody.appendChild(fragment);
 
-  if (_rawRows.length > MAX_RENDER_ROWS) {
+  if (_rawRows.length > MAX_RENDER_ROWS || _rawTruncated) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan     = _rawCols.length;
-    td.className   = "sf-table-truncate-msg";
-    td.textContent =
-      `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${_rawRows.length.toLocaleString()}건) — 전체는 Excel 다운로드`;
+    td.colSpan   = _rawCols.length;
+    td.className = "sf-table-truncate-msg";
+    td.textContent = _rawTruncated
+      // Excel 도 불러온 만큼만 담기므로 "전체 다운로드" 라고 하지 않는다
+      ? `… 상위 ${Math.min(MAX_RENDER_ROWS, _rawRows.length).toLocaleString()}건 표시 · ` +
+        `Excel 은 불러온 ${_rawRows.length.toLocaleString()}건 (조회 상한 ${_rawMaxRows.toLocaleString()}건) — ` +
+        `전체 ${_rawTotal.toLocaleString()}건을 보려면 기간·필터를 좁혀 주세요`
+      : `… 상위 ${MAX_RENDER_ROWS}건 표시 (전체 ${_rawRows.length.toLocaleString()}건) — 전체는 Excel 다운로드`;
     tr.appendChild(td);
     tbody.appendChild(tr);
   }
@@ -694,9 +738,11 @@ function renderRaw(rows, columns, badgeText) {
 function hideRaw() {
   const section = document.getElementById("lrRawSection");
   if (section) section.style.display = "none";
-  _rawRows  = [];
-  _rawCols  = [];
-  _rawBadge = "";
+  _rawRows      = [];
+  _rawCols      = [];
+  _rawBadge     = "";
+  _rawTotal     = 0;
+  _rawTruncated = false;
 }
 
 function downloadRawExcel() {
@@ -737,7 +783,10 @@ function downloadRawExcel() {
     const fileName = `lossraw_${label || "all"}_${ts}.xlsx`;
 
     XLSX.writeFile(wb, fileName, { bookType: "xlsx" });
-    showToast(`📥 ${fileName} 다운로드 완료!`);
+    showToast(_rawTruncated
+      ? `📥 ${fileName} — 조회 상한 ${_rawMaxRows.toLocaleString()}건까지만 포함됐습니다 ` +
+        `(전체 ${_rawTotal.toLocaleString()}건). 기간·필터를 좁혀 주세요.`
+      : `📥 ${fileName} 다운로드 완료!`, _rawTruncated ? 7000 : 4000);
   } catch (err) {
     console.error("[downloadRawExcel]", err);
     showToast(`Excel 저장 실패: ${err.message}`);

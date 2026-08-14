@@ -113,8 +113,8 @@ def get_aggregate(level, parents, start=None, end=None, filters=None):
              "cnt": r["cnt"]} for r in qs]
 
 
-def get_raw_rows(parents, start=None, end=None, filters=None):
-    """드릴다운 최하위(kind+param_type+param_name) 의 raw 행."""
+def _raw_queryset(parents, start=None, end=None, filters=None):
+    """드릴다운 최하위(kind+param_type+param_name) raw 행의 queryset (limit 없음)."""
     allowed = {"kind", "param_type", "param_name"}
     clean = {k: v for k, v in (parents or {}).items()
              if k in allowed and v not in (None, "")}
@@ -122,6 +122,23 @@ def get_raw_rows(parents, start=None, end=None, filters=None):
     qs = _apply_common_filters(qs, start, end, filters)
     for k, v in clean.items():
         qs = qs.filter(_parent_q(k, v))
-    qs = qs.values(*RAW_COLUMNS).order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS]
+    return qs
+
+
+def get_raw_rows(parents, start=None, end=None, filters=None):
+    """
+    드릴다운 최하위의 raw 행 (최대 MAX_RAW_ROWS 건).
+
+    상한을 넘는 경우가 있으므로 실제 건수는 count_raw_rows() 로 따로 확인한다
+    (응답의 total 을 상한값으로 보고하면 잘린 사실이 숨겨진다).
+    """
+    qs = (_raw_queryset(parents, start, end, filters)
+          .values(*RAW_COLUMNS)
+          .order_by("yyyymmdd", "start_time")[:MAX_RAW_ROWS])
     # 출력 순서를 RAW_COLUMNS 로 고정한다 (.values() 는 dict 순서를 보장하지 않음)
     return [{col: row.get(col) for col in RAW_COLUMNS} for row in qs]
+
+
+def count_raw_rows(parents, start=None, end=None, filters=None) -> int:
+    """get_raw_rows 와 같은 조건의 전체 건수 (상한 적용 전)."""
+    return _raw_queryset(parents, start, end, filters).count()

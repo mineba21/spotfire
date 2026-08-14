@@ -23,7 +23,8 @@ from stoploss_ai.services.detail_service  import (
 )
 from stoploss_ai.services.ratio_service import get_ratio_analysis
 from stoploss_ai.services.lossraw_service import (
-    get_aggregate, get_raw_rows, get_filter_options, RAW_COLUMNS as LOSSRAW_COLUMNS,
+    get_aggregate, get_raw_rows, count_raw_rows, get_filter_options,
+    RAW_COLUMNS as LOSSRAW_COLUMNS, MAX_RAW_ROWS as LOSSRAW_MAX_ROWS,
 )
 from stoploss_ai.services.ai_service      import ask_ai, VALID_PAGE_CONTEXTS
 
@@ -233,14 +234,24 @@ def api_lossraw_raw(request):
                "param_type": request.GET.get("param_type"),
                "param_name": request.GET.get("param_name")}
     parents = {k: v for k, v in parents.items() if v}
-    rows = get_raw_rows(parents,
-                        start=request.GET.get("start"),
-                        end=request.GET.get("end"),
-                        filters=_parse_lossraw_filters(request.GET))
+    start   = request.GET.get("start")
+    end     = request.GET.get("end")
+    filters = _parse_lossraw_filters(request.GET)
+
+    rows = get_raw_rows(parents, start=start, end=end, filters=filters)
+
+    # rows 는 MAX_RAW_ROWS 로 잘릴 수 있다. total 에 잘린 건수를 넣으면
+    # 화면/Excel 이 "전체" 를 받은 것처럼 보이므로 실제 건수를 따로 센다.
+    total = (len(rows) if len(rows) < LOSSRAW_MAX_ROWS
+             else count_raw_rows(parents, start=start, end=end, filters=filters))
+
     return JsonResponse({"ok": True, "data": {
-        "rows":    rows,
-        "columns": LOSSRAW_COLUMNS,
-        "total":   len(rows),
+        "rows":      rows,
+        "columns":   LOSSRAW_COLUMNS,
+        "total":     total,
+        "loaded":    len(rows),
+        "truncated": total > len(rows),
+        "max_rows":  LOSSRAW_MAX_ROWS,
     }})
 
 
