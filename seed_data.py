@@ -63,7 +63,42 @@ CREATE TABLE IF NOT EXISTS interlock_raw (
 """
 
 # ─── 마스터 데이터 ──────────────────────────────────────────────
-YYYY = "2026"
+# 실행 시점(오늘) 기준으로 최근 구간을 만든다.
+#   · chart_service 의 cube 는 최근 12개월만 담으므로 raw 도 12개월치를 만든다.
+#   · 12개월이면 작년/올해가 섞이므로 "작년 10월 + 올해 3월" 같은
+#     연도 혼합 멀티 bar 선택을 그대로 검증할 수 있다.
+TODAY      = datetime.date.today()
+YYYY       = str(TODAY.year)
+RAW_MONTHS = 12
+
+
+def _week_num(d: datetime.date) -> int:
+    """get_date_range 와 같은 규칙: 1/1 부터 경과일 // 7 + 1"""
+    return (d - datetime.date(d.year, 1, 1)).days // 7 + 1
+
+
+def _recent_months(n=4):
+    """올해 범위 안에서 최근 n개월 flagdate ("M08" 형식)."""
+    first = max(1, TODAY.month - n + 1)
+    return [f"M{m:02d}" for m in range(first, TODAY.month + 1)]
+
+
+def _recent_weeks(n=16):
+    """올해 범위 안에서 최근 n주 flagdate ("W33" 형식)."""
+    cur = _week_num(TODAY)
+    return [f"W{w:02d}" for w in range(max(1, cur - n + 1), cur + 1)]
+
+
+def _recent_days(n=14):
+    """올해 범위 안에서 최근 n일 (date 객체)."""
+    days = [TODAY - datetime.timedelta(days=i) for i in range(n - 1, -1, -1)]
+    return [d for d in days if d.year == TODAY.year]
+
+
+def _raw_period():
+    """raw 생성 구간 = 최근 RAW_MONTHS 개월 ~ 오늘."""
+    total = TODAY.year * 12 + (TODAY.month - 1) - (RAW_MONTHS - 1)
+    return datetime.date(total // 12, total % 12 + 1, 1), TODAY
 
 # 라인별 설비 매핑: line → [(eqp_id, eqp_model, unit_id), ...]
 EQP_MAP = {
@@ -102,22 +137,15 @@ SLOT_NOS = [str(i) for i in range(1, 26)]
 def _make_report_rows():
     rows = []
 
-    # ── Monthly: M01 ~ M04 ──────────────────────────────────────
-    for m in range(1, 5):
-        flagdate = f"M{m:02d}"
+    # ── Monthly / Weekly / Daily: 오늘 기준 최근 구간 ────────────
+    for flagdate in _recent_months():
         _append_report_rows(rows, "M", flagdate)
 
-    # ── Weekly: W01 ~ W16 ───────────────────────────────────────
-    for w in range(1, 17):
-        flagdate = f"W{w:02d}"
+    for flagdate in _recent_weeks():
         _append_report_rows(rows, "W", flagdate)
 
-    # ── Daily: 04/01 ~ 04/14 ────────────────────────────────────
-    base = datetime.date(2026, 4, 1)
-    for d in range(14):
-        day      = base + datetime.timedelta(days=d)
-        flagdate = day.strftime("%m/%d")       # "04/01" 형식
-        _append_report_rows(rows, "D", flagdate, max_combos=4)
+    for day in _recent_days():
+        _append_report_rows(rows, "D", day.strftime("%m/%d"), max_combos=4)
 
     return rows
 
@@ -169,13 +197,12 @@ def _append_report_rows(rows, flag, flagdate, max_combos=5):
 # ─── Raw 데이터 생성 ─────────────────────────────────────────────
 def _make_raw_rows():
     """
-    2026-03-01 ~ 2026-04-14 범위의 이벤트 로그 생성.
+    최근 RAW_MONTHS 개월(= cube 창) 범위의 이벤트 로그 생성.
     각 날짜 × 설비 조합에 2~6건의 이벤트.
     """
     rows = []
 
-    start = datetime.date(2026, 3, 1)
-    end   = datetime.date(2026, 4, 14)
+    start, end = _raw_period()
     delta = (end - start).days + 1
 
     lot_counter = 1000
@@ -262,8 +289,9 @@ def run():
         cur.execute("SELECT flag, COUNT(*) FROM report_interlock GROUP BY flag")
         for flag, cnt in cur.fetchall():
             print(f"  report [{flag}] : {cnt}행")
-        cur.execute("SELECT COUNT(*) FROM interlock_raw")
-        print(f"  raw 총계         : {cur.fetchone()[0]:,}건")
+        cur.execute("SELECT COUNT(*), MIN(yyyymmdd), MAX(yyyymmdd) FROM interlock_raw")
+        cnt, ymd_min, ymd_max = cur.fetchone()
+        print(f"  raw 총계         : {cnt:,}건 ({ymd_min} ~ {ymd_max})")
 
     print("\n샘플 데이터 삽입 완료!")
 
