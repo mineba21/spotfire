@@ -37,6 +37,28 @@ ERR_INVALID_JSON_BODY = "요청 body 가 유효한 JSON 이 아닙니다."
 VALID_FLAGS: set = {"M", "W", "D"}
 
 
+def _parse_fd_pairs(GET) -> list:
+    """
+    bar 선택을 (flagdate, yyyy) 쌍 리스트로 파싱한다.
+
+    신규: fd=M03@2026 (bar 마다 자기 연도) — 서로 다른 연도의 bar 를 함께 선택 가능
+    구버전 하위 호환: flagdate=M03&flagdate=M10 + yyyy=2026 (모두 같은 연도)
+    """
+    pairs = []
+    for raw in GET.getlist("fd"):
+        if "@" in raw:
+            fdate, fy = raw.rsplit("@", 1)
+            if fdate.strip() and fy.strip():
+                pairs.append((fdate.strip(), fy.strip()))
+    if pairs:
+        return pairs
+
+    yyyy = GET.get("yyyy", "").strip()
+    if not yyyy:
+        return []
+    return [(fd.strip(), yyyy) for fd in GET.getlist("flagdate") if fd.strip()]
+
+
 # ─────────────────────────────────────────────────────────────────
 # 페이지 뷰
 # ─────────────────────────────────────────────────────────────────
@@ -64,18 +86,18 @@ def api_report_data(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_click_detail(request):
-    flag      = request.GET.get("flag", "").strip().upper()
-    yyyy      = request.GET.get("yyyy", "").strip()
-    # 멀티 bar 지원: flagdate 가 여러 개 올 수 있음 (같은 flag 내)
-    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
+    flag     = request.GET.get("flag", "").strip().upper()
+    yyyy     = request.GET.get("yyyy", "").strip()
+    # 멀티 bar 지원: bar 마다 자기 연도를 갖는 (flagdate, yyyy) 쌍
+    fd_pairs = _parse_fd_pairs(request.GET)
 
-    if not flag or not yyyy or not flagdates:
+    if not flag or not fd_pairs:
         return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
     if flag not in VALID_FLAGS:
         return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
 
     filters = parse_sidebar_filters(request.GET)
-    rows    = get_raw_detail(flag, yyyy, flagdates, filters)
+    rows    = get_raw_detail(flag, yyyy, fd_pairs, filters)
 
     if rows is None:
         return JsonResponse({"ok": False, "error": ERR_DATE_PARSE}, status=400)
@@ -87,7 +109,12 @@ def api_click_detail(request):
             "columns": columns,
             "rows":    rows,
             "total":   len(rows),
-            "context": {"flag": flag, "yyyy": yyyy, "flagdates": flagdates},
+            "context": {
+                "flag":      flag,
+                "yyyy":      yyyy,
+                "flagdates": [fd for fd, _ in fd_pairs],
+                "fd_pairs":  [f"{fd}@{fy}" for fd, fy in fd_pairs],
+            },
         }
     })
 
@@ -103,26 +130,26 @@ def api_click_detail_export(request):
     click-detail 과 같은 파라미터를 받지만 MAX_RAW_ROWS 제한 없이 전체 행을 반환한다.
     openpyxl write_only + queryset.iterator() 로 메모리 효율적 스트리밍.
     """
-    flag      = request.GET.get("flag", "").strip().upper()
-    yyyy      = request.GET.get("yyyy", "").strip()
-    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
+    flag     = request.GET.get("flag", "").strip().upper()
+    yyyy     = request.GET.get("yyyy", "").strip()
+    fd_pairs = _parse_fd_pairs(request.GET)
 
-    if not flag or not yyyy or not flagdates:
+    if not flag or not fd_pairs:
         return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
     if flag not in VALID_FLAGS:
         return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
 
     filters  = parse_sidebar_filters(request.GET)
-    rows_it  = iter_raw_detail_export(flag, yyyy, flagdates, filters)
+    rows_it  = iter_raw_detail_export(flag, yyyy, fd_pairs, filters)
 
     # 파일명: rawdata_<flag><flagdates>_YYYYMMDD_HHMM.xlsx
     import datetime as _dt
-    bar_label = f"{flag}{'-'.join(fd.replace('/', '') for fd in flagdates)}"
+    bar_label = f"{flag}{'-'.join(fd.replace('/', '') for fd, _ in fd_pairs)}"
     ts        = _dt.datetime.now().strftime("%Y%m%d_%H%M")
     filename  = f"rawdata_{bar_label}_{ts}.xlsx"
 
-    logger.info("[ClickDetailExport] flag=%s yyyy=%s flagdates=%s filters=%s",
-                flag, yyyy, flagdates, filters)
+    logger.info("[ClickDetailExport] flag=%s fd_pairs=%s filters=%s",
+                flag, fd_pairs, filters)
 
     return xlsx_response(
         rows_it, RAW_COLUMNS, sheet_name="RawData", filename=filename,
@@ -143,10 +170,10 @@ def api_filter_options(request):
 # ─────────────────────────────────────────────────────────────────
 @require_GET
 def api_top_aggregate(request):
-    flag      = request.GET.get("flag", "").strip().upper()
-    yyyy      = request.GET.get("yyyy", "").strip()
-    flagdates = [fd.strip() for fd in request.GET.getlist("flagdate") if fd.strip()]
-    if not flag or not yyyy or not flagdates:
+    flag     = request.GET.get("flag", "").strip().upper()
+    yyyy     = request.GET.get("yyyy", "").strip()
+    fd_pairs = _parse_fd_pairs(request.GET)
+    if not flag or not fd_pairs:
         return JsonResponse({"ok": False, "error": ERR_MISSING_PARAMS}, status=400)
     if flag not in VALID_FLAGS:
         return JsonResponse({"ok": False, "error": ERR_INVALID_FLAG}, status=400)
@@ -157,7 +184,7 @@ def api_top_aggregate(request):
     except ValueError:
         top_n = 10
     filters = parse_sidebar_filters(request.GET)
-    rows = get_top_aggregate(flag, yyyy, flagdates, filters, group_cols, top_n)
+    rows = get_top_aggregate(flag, yyyy, fd_pairs, filters, group_cols, top_n)
     return JsonResponse({"ok": True, "data": {
         "rows": rows, "group_cols": group_cols, "total": len(rows)}})
 

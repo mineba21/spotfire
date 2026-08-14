@@ -53,22 +53,23 @@ class StoplossDetailTests(TransactionTestCase):
             plan_time=100, stoploss=99, rank=2,
         )
 
-        # ── TpmEqpLoss: loss_time_min 은 start/end 차이로 계산 ──────
-        # 5.5 분 = 5 분 30 초, 7.0 분 = 7 분, 9.5 분 = 9 분 30 초
+        # ── TpmEqpLoss: loss_time_min 은 적재된 DB 컬럼 값 ──────────
         # state="SETUP_BASE" — ratio 테스트의 "A"/"B" 와 충돌 안 하도록 분리
-        for yyyymmdd, start, end in (
-            ("20260101", "2026-01-01 10:00:00", "2026-01-01 10:05:30"),  # 5.5 min
-            ("20260102", "2026-01-02 10:00:00", "2026-01-02 10:07:00"),  # 7.0 min
-            ("20260103", "2026-01-03 10:00:00", "2026-01-03 10:09:30"),  # 9.5 min
+        for yyyymmdd, start, end, loss_min in (
+            ("20260101", "2026-01-01 10:00:00", "2026-01-01 10:05:30", 5.5),
+            ("20260102", "2026-01-02 10:00:00", "2026-01-02 10:07:00", 7.0),
+            ("20260103", "2026-01-03 10:00:00", "2026-01-03 10:09:30", 9.5),
         ):
             TpmEqpLoss.objects.using("tpm").create(
                 yyyymmdd=yyyymmdd,
                 eqp_id="EQP-1",
+                station="EQP-1",
                 start_time=start,
                 end_time=end,
                 state="SETUP_BASE",
                 param_type="ERD",
                 param_name="EMG_STOP",
+                loss_time_min=loss_min,
             )
 
     def test_stoploss_report_default_manager_excludes_string_none(self):
@@ -105,6 +106,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 00:00:00",
                 end_time="2026-01-01 10:00:00",
                 state="A",
+                loss_time_min=600.0,
             ),
             TpmEqpLoss(
                 yyyymmdd="20260101",
@@ -112,6 +114,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 10:00:00",
                 end_time="2026-01-02 00:00:00",
                 state="B",
+                loss_time_min=840.0,
             ),
             TpmEqpLoss(
                 yyyymmdd="20260101",
@@ -119,6 +122,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 00:00:00",
                 end_time="2026-01-02 00:00:00",
                 state="A",
+                loss_time_min=1440.0,
             ),
         ])
 
@@ -145,6 +149,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 00:00:00",
                 end_time="2026-01-01 01:00:00",
                 state="A",
+                loss_time_min=60.0,
             ),
             TpmEqpLoss(
                 yyyymmdd="20260101",
@@ -152,6 +157,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 01:00:00",
                 end_time="2026-01-01 04:00:00",
                 state="B",
+                loss_time_min=180.0,
             ),
         ])
 
@@ -177,6 +183,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 00:00:00",
                 end_time="2026-01-01 01:00:00",
                 state="A",
+                loss_time_min=60.0,
             ),
             TpmEqpLoss(
                 yyyymmdd="20260101",
@@ -184,6 +191,7 @@ class StoplossDetailTests(TransactionTestCase):
                 start_time="2026-01-01 00:00:00",
                 end_time="2026-01-01 01:00:00",
                 state="A",
+                loss_time_min=60.0,
             ),
         ])
 

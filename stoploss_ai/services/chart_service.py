@@ -11,17 +11,100 @@ stoploss_ai/services/chart_service.py
 [변경 이력]
   - area(DB) ↔ line(앱) 통일 — 모델 필드 line, DB 컬럼 area
   - LOSS_COLUMNS 에 eng, etc, stepchg, std_time, rd 추가
+  - 결과 캐싱 추가 — checkdb.item_status 버전 마커로 무효화 (적재 시 자동 갱신)
 """
 
+import json
+import logging
+import threading
+import time
 from collections import defaultdict
+
+from django.db import connections   # 복수형 connections (단수 connection 아님)
+
 from stoploss_ai.models import StoplossReport, LOSS_COLUMNS
 from .filter_service import build_q
+
+logger = logging.getLogger(__name__)
 
 FLAGS             = ["M", "W", "D"]
 DEFAULT_RANK_LIMIT = 999
 
+# ─── 결과 캐싱 + 버전 마커 (checkdb.item_status) ──────────────────
+CHECK_DB_ALIAS         = "checkdb"
+DATA_VERSION_ITEM      = "report_stoploss"   # ★ 적재 마커 item_name (선결 확인 필요)
+VERSION_CHECK_INTERVAL = 30   # 초
 
-def get_chart_data(
+# 필터 조합마다 항목이 하나씩 쌓이므로 상한을 둔다 (초과 시 전체 비움).
+MAX_CACHE_ENTRIES = 200
+
+_chart_cache: dict       = {}
+_chart_version: str      = ""
+_chart_checked_at: float = 0.0
+_chart_lock              = threading.Lock()
+
+
+def _read_data_version():
+    """checkdb 조회 실패 시 None — 캐시 유지 신호."""
+    try:
+        with connections[CHECK_DB_ALIAS].cursor() as cur:
+            cur.execute(
+                "SELECT last_update_time FROM item_status WHERE item_name = %s",
+                [DATA_VERSION_ITEM],
+            )
+            row = cur.fetchone()
+        return str(row[0]) if row else ""
+    except Exception as exc:
+        logger.warning("[StoplossChart] checkdb 버전 조회 실패 — 캐시 유지: %s", exc)
+        return None
+
+
+def _maybe_reset_cache():
+    """버전이 바뀌었으면 캐시 전체를 비운다 (30초 주기로만 확인)."""
+    global _chart_version, _chart_checked_at, _chart_cache
+    now = time.time()
+    if now - _chart_checked_at < VERSION_CHECK_INTERVAL:
+        return
+    version = _read_data_version()
+    _chart_checked_at = now
+    if version is not None and version != _chart_version:
+        with _chart_lock:
+            _chart_cache = {}
+            _chart_version = version
+            logger.info("[StoplossChart] 캐시 무효화 | version=%s", version)
+
+
+def invalidate_chart_cache():
+    """수동 강제 무효화용."""
+    global _chart_cache, _chart_version
+    with _chart_lock:
+        _chart_cache = {}
+        _chart_version = ""
+
+
+def get_chart_data(filters, rank_limits, y_field="stoploss", y_mode="min"):
+    """결과 캐싱 래퍼. 캐시 미스 시 _compute_chart_data 로 위임."""
+    _maybe_reset_cache()
+    key = json.dumps({
+        "f":  {k: sorted(v) for k, v in filters.items() if v},
+        "r":  rank_limits,
+        "yf": y_field,
+        "ym": y_mode,
+    }, sort_keys=True, ensure_ascii=False)
+
+    cached = _chart_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _compute_chart_data(filters, rank_limits, y_field, y_mode)
+    with _chart_lock:
+        if len(_chart_cache) >= MAX_CACHE_ENTRIES:
+            _chart_cache.clear()
+        _chart_cache[key] = result
+    return result
+
+
+def _compute_chart_data(
     filters:     dict,
     rank_limits: dict,
     y_field:     str = "stoploss",

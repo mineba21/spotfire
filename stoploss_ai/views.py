@@ -22,6 +22,10 @@ from stoploss_ai.services.detail_service  import (
     REPORT_COLUMNS, EQP_LOSS_COLUMNS,
 )
 from stoploss_ai.services.ratio_service import get_ratio_analysis
+from stoploss_ai.services.lossraw_service import (
+    get_aggregate, get_raw_rows, count_raw_rows, get_filter_options,
+    RAW_COLUMNS as LOSSRAW_COLUMNS, MAX_RAW_ROWS as LOSSRAW_MAX_ROWS,
+)
 from stoploss_ai.services.ai_service      import ask_ai, VALID_PAGE_CONTEXTS
 
 from config.excel_utils import xlsx_response
@@ -184,6 +188,71 @@ def api_eqp_loss_detail(request):
             "total":   len(rows),
         },
     })
+
+
+# ─────────────────────────────────────────────────────────────────
+# 설비 Loss 분석 (tpm_eqp_loss 드릴다운) — kind → param_type → param_name → raw
+# ─────────────────────────────────────────────────────────────────
+
+LOSSRAW_FILTER_PARAMS = ["area", "eqp_id", "kind", "param_type"]
+
+
+def _parse_lossraw_filters(GET):
+    return {f: [v for v in GET.getlist(f) if v and v != "ALL"]
+            for f in LOSSRAW_FILTER_PARAMS}
+
+
+def lossraw_index(request):
+    return render(request, "stoploss_ai/lossraw.html",
+                  {"filter_options": get_filter_options()})
+
+
+@require_GET
+def api_lossraw_filter_options(request):
+    constraints = _parse_lossraw_filters(request.GET)
+    data = get_filter_options(request.GET.get("start"),
+                              request.GET.get("end"), constraints)
+    return JsonResponse({"ok": True, "data": data})
+
+
+@require_GET
+def api_lossraw_agg(request):
+    level   = request.GET.get("level", "kind")
+    parents = {"kind": request.GET.get("kind"),
+               "param_type": request.GET.get("param_type")}
+    parents = {k: v for k, v in parents.items() if v}
+    rows = get_aggregate(level, parents,
+                         start=request.GET.get("start"),
+                         end=request.GET.get("end"),
+                         filters=_parse_lossraw_filters(request.GET))
+    return JsonResponse({"ok": True, "data": {"level": level, "rows": rows}})
+
+
+@require_GET
+def api_lossraw_raw(request):
+    parents = {"kind": request.GET.get("kind"),
+               "param_type": request.GET.get("param_type"),
+               "param_name": request.GET.get("param_name")}
+    parents = {k: v for k, v in parents.items() if v}
+    start   = request.GET.get("start")
+    end     = request.GET.get("end")
+    filters = _parse_lossraw_filters(request.GET)
+
+    rows = get_raw_rows(parents, start=start, end=end, filters=filters)
+
+    # rows 는 MAX_RAW_ROWS 로 잘릴 수 있다. total 에 잘린 건수를 넣으면
+    # 화면/Excel 이 "전체" 를 받은 것처럼 보이므로 실제 건수를 따로 센다.
+    total = (len(rows) if len(rows) < LOSSRAW_MAX_ROWS
+             else count_raw_rows(parents, start=start, end=end, filters=filters))
+
+    return JsonResponse({"ok": True, "data": {
+        "rows":      rows,
+        "columns":   LOSSRAW_COLUMNS,
+        "total":     total,
+        "loaded":    len(rows),
+        "truncated": total > len(rows),
+        "max_rows":  LOSSRAW_MAX_ROWS,
+    }})
 
 
 @csrf_exempt

@@ -746,7 +746,8 @@ async function fetchClickDetail() {
   const bars = state.selectedBars;
   if (!bars.length) { showToast(MSG.MISSING_BAR); return; }
 
-  // 모든 bar 는 같은 flag/yyyy 여야 함 (onBarClick 에서 보장)
+  // flag 는 모든 bar 가 동일 (onBarClick 에서 보장). yyyy 는 bar 마다 다를 수 있어
+  // fd=flagdate@yyyy 쌍으로 보내고, 여기 yyyy 는 구버전 하위 호환용이다.
   const flag = bars[0].flag;
   const yyyy = bars[0].yyyy;
 
@@ -755,8 +756,9 @@ async function fetchClickDetail() {
 
   const params = collectFilters();
   params.append("flag", flag);
-  params.append("yyyy", yyyy);
-  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("yyyy", yyyy);                     // 하위 호환용
+  // bar 마다 자기 연도를 실어 보낸다 (25년 10월 + 26년 3월 혼합 선택 지원)
+  bars.forEach((b) => params.append("fd", `${b.flagdate}@${b.yyyy}`));
 
   const url = `${URLS.clickDetail}?${params.toString()}`;
 
@@ -951,8 +953,9 @@ async function renderTopPanel() {
 
   const params = collectFilters();
   params.append("flag", flag);
-  params.append("yyyy", yyyy);
-  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("yyyy", yyyy);                     // 하위 호환용
+  // bar 마다 자기 연도를 실어 보낸다 (25년 10월 + 26년 3월 혼합 선택 지원)
+  bars.forEach((b) => params.append("fd", `${b.flagdate}@${b.yyyy}`));
   params.append("group_cols", groupCols.join(","));
   params.append("top_n", topN);
 
@@ -1111,8 +1114,9 @@ async function onTopBarClick(clickedRow, groupCols) {
 
   const params = collectFilters();
   params.append("flag", flag);
-  params.append("yyyy", yyyy);
-  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("yyyy", yyyy);                     // 하위 호환용
+  // bar 마다 자기 연도를 실어 보낸다 (25년 10월 + 26년 3월 혼합 선택 지원)
+  bars.forEach((b) => params.append("fd", `${b.flagdate}@${b.yyyy}`));
 
   // 클릭된 그룹 조건으로 해당 컬럼 필터를 덮어쓴다 (기존 선택값 제거 후 단일값 지정)
   groupCols.forEach((col) => {
@@ -1649,8 +1653,8 @@ function downloadRawExcel() {
 
   const params = collectFilters();
   params.append("flag", bars[0].flag);
-  params.append("yyyy", bars[0].yyyy);
-  bars.forEach((b) => params.append("flagdate", b.flagdate));
+  params.append("yyyy", bars[0].yyyy);             // 하위 호환용
+  bars.forEach((b) => params.append("fd", `${b.flagdate}@${b.yyyy}`));
 
   window.location.href = `${URLS.clickDetailExport}?${params.toString()}`;
   showToast("📥 Excel 생성 중…");

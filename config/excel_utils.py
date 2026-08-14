@@ -14,6 +14,7 @@ Excel (.xlsx) 다운로드 응답 생성 유틸리티.
   HttpResponse 내부 버퍼에 누적되어, 동시 다운로드 시 서버 메모리가
   사용자 수 × 파일 크기 만큼 증가하는 문제가 있었다.
 """
+import datetime
 import os
 import tempfile
 from urllib.parse import quote
@@ -34,6 +35,18 @@ _XLSX_CONTENT_TYPE = (
 
 # 디스크 → 클라이언트 전송 시 read chunk 크기 (8KB 는 Django FileResponse 기본값과 동일)
 _STREAM_CHUNK = 8192
+
+
+def _safe_cell_value(val):
+    """
+    openpyxl 은 tz-aware datetime 을 지원하지 않는다
+    ("Excel does not support timezones in datetimes") → naive 로 변환.
+    """
+    if isinstance(val, datetime.datetime) and val.tzinfo is not None:
+        return val.replace(tzinfo=None)
+    if isinstance(val, datetime.time) and val.tzinfo is not None:
+        return val.replace(tzinfo=None)
+    return val
 
 
 def _stream_and_cleanup(path, chunk_size=_STREAM_CHUNK):
@@ -83,11 +96,11 @@ def xlsx_response(rows, columns, sheet_name="Sheet1", filename="export.xlsx",
     # ── 데이터 행 ──────────────────────────────────────────────
     if transform is None:
         for row in rows:
-            ws.append([row.get(c, "") for c in columns])
+            ws.append([_safe_cell_value(row.get(c, "")) for c in columns])
     else:
         for row in rows:
             t = transform(row)
-            ws.append([t.get(c, "") for c in columns])
+            ws.append([_safe_cell_value(t.get(c, "")) for c in columns])
 
     # ── 임시 파일에 저장 → 디스크에서 stream ───────────────────
     # NamedTemporaryFile(delete=False) 로 핸들을 닫고 path 만 사용한다.

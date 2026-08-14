@@ -8,8 +8,8 @@ stoploss_ai/services/ratio_service.py
      → "어떤 원인(state/eqp_model/line 등)이 몇 분 정지로스를 유발했나" 분석.
 
   2. loss_time_min 은 raw event duration 합이 아니다.
-     tpm_eqp_loss 의 raw duration 을 EQP별 report_stoploss.stoploss 합에 비례 배분한
-     allocated loss minutes 이다.
+     tpm_eqp_loss.loss_time_min(적재 컬럼) 을 EQP별 report_stoploss.stoploss 합에
+     비례 배분한 allocated loss minutes 이다.
 
   3. 분자와 분모는 같은 report_stoploss scope 를 기준으로 맞춘다.
      - yyyy / flag / flagdate + sidebar filter 전체를 report_stoploss 에 먼저 적용한다.
@@ -32,12 +32,10 @@ stoploss_ai/services/ratio_service.py
   [B] report_stoploss 메타 컬럼을 group_by 로 쓰는 경우 (eqp_model, line, sdwt_prod):
       이미 eqp_meta 에서 lookup 가능 — (A)와 동일하게 추가만 하면 됨.
 
-  [C] 외부 테이블(SpotfireRaw 의 param_type / param_name) 을 쓰려면:
-      1) SpotfireRaw 에서 yyyymmdd + eqp_id + act_time 범위로 조인이 필요
-      2) 현재 tpm_eqp_loss.start_time ~ end_time 구간과 교집합 판정 로직 추가
-      3) _aggregate_by_group() 내부에서 해당 param_type / param_name 을 키로 사용
-
-  (param_type / param_name 은 Raw 전용 컬럼이므로 [C] 구현 후 options 에 노출)
+  [C] param_type / param_name:
+      tpm_eqp_loss 자체 컬럼이므로 [A] 와 동일한 절차로 추가된다.
+      (과거엔 SpotfireRaw 조인이 필요하다고 보았으나 tpm_eqp_loss 에 적재됨)
+      단, 소스에 따라 값이 비어 있을 수 있어 "(unknown)" 으로 묶인다.
 ────────────────────────────────────────────────────────────────
 """
 import logging
@@ -48,7 +46,6 @@ from django.db.models import Q
 
 from stoploss_ai.models import TpmEqpLoss, StoplossReport
 from stoploss_ai.services.filter_service import build_q
-from stoploss_ai.services.detail_service import _calc_loss_min  # noqa: F401 — 공용
 from interlock_ai.services.detail_service import get_date_range
 
 logger = logging.getLogger(__name__)
@@ -60,8 +57,11 @@ logger = logging.getLogger(__name__)
 #   - eqp_model  : report_stoploss 메타 조회
 #   - line       : report_stoploss 메타 조회 (구 area, DB 컬럼명은 area 유지)
 #   - sdwt_prod  : report_stoploss 메타 조회
+#   - param_type : tpm_eqp_loss.param_type
+#   - param_name : tpm_eqp_loss.param_name
 # ─────────────────────────────────────────────────────────────────
-VALID_GROUP_BY = {"state", "eqp_id", "eqp_model", "line", "sdwt_prod"}
+VALID_GROUP_BY = {"state", "eqp_id", "eqp_model", "line", "sdwt_prod",
+                  "param_type", "param_name"}
 
 
 def _collect_date_ranges(flag: str, yyyy: str, flagdates: list):
@@ -152,7 +152,7 @@ def get_ratio_analysis(
     loss_rows = list(
         TpmEqpLoss.objects
         .filter(q_loss)
-        .values("eqp_id", "start_time", "end_time", "state")
+        .values("eqp_id", "state", "param_type", "param_name", "loss_time_min")
         .order_by("yyyymmdd", "start_time")
     )
 
@@ -162,7 +162,7 @@ def get_ratio_analysis(
 
     for row in loss_rows:
         eqp_id = row["eqp_id"] or ""
-        raw_loss = _calc_loss_min(row["start_time"], row["end_time"])
+        raw_loss = row["loss_time_min"] or 0.0
         if raw_loss <= 0:
             continue
         prepared_events.append((row, raw_loss))
@@ -196,11 +196,13 @@ def get_ratio_analysis(
         line      = meta["line"]
 
         group_key_map = {
-            "state":     row["state"]   or "(unknown)",
-            "eqp_id":    eqp_id         or "(unknown)",
-            "eqp_model": eqp_model      or "(unknown)",
-            "line":      line           or "(unknown)",
-            "sdwt_prod": sdwt_prod      or "(unknown)",
+            "state":      row["state"]      or "(unknown)",
+            "eqp_id":     eqp_id            or "(unknown)",
+            "eqp_model":  eqp_model         or "(unknown)",
+            "line":       line              or "(unknown)",
+            "sdwt_prod":  sdwt_prod         or "(unknown)",
+            "param_type": row["param_type"] or "(unknown)",
+            "param_name": row["param_name"] or "(unknown)",
         }
         group_key = group_key_map[group_by]
 

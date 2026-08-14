@@ -62,11 +62,13 @@ const COLORS = [
 
 const MAX_RENDER_ROWS = 500;
 
+// cascading 순서 = 배열 순서. prc_group 을 eqp_id 앞에 두어야
+// prc_group 선택 시 eqp_id 옵션이 좁혀진다.
 const FILTER_ORDER = [
   { id: "filterLine",     dataKey: "lines",      field: "line"      },
   { id: "filterSdwtProd", dataKey: "sdwt_prods", field: "sdwt_prod" },
   { id: "filterEqpModel", dataKey: "eqp_models", field: "eqp_model" },
-  { id: "filterPrcGroup", dataKey: "prc_groups", field: "prc_group" },
+  { id: "filterPrcGroup", dataKey: "prc_groups", field: "prc_group" },  // ← eqp_id 앞으로
   { id: "filterEqpId",    dataKey: "eqp_ids",    field: "eqp_id"    },
 ];
 
@@ -158,15 +160,24 @@ const COL_LABELS = {
 };
 
 /**
- * Top Show 그룹화 기준 컬럼 목록
- * stoploss의 report_stoploss 테이블 컬럼 기준 (line/sdwt_prod/eqp_model)
+ * Top Show 그룹화 기준 컬럼 목록 — 데이터 소스별 2벌.
+ *
+ * stoploss : report_stoploss 컬럼 기준 (line/sdwt_prod/eqp_model)
+ * lossraw  : tpm_eqp_loss 집계 기준 — 서버(ratio_service)가 ratio_group_by
+ *            로 재집계하므로 RATIO_GROUP_OPTIONS 의 값과 동일해야 한다.
  */
-const TOP_GROUP_OPTIONS = [
-  { value: "line",               label: "Line"              },
-  { value: "line,sdwt_prod",     label: "Line + 분임조"      },
-  { value: "line,eqp_model",     label: "Line + EQP Model"  },
-  { value: "eqp_model",          label: "EQP Model"         },
-  { value: "sdwt_prod",          label: "분임조"             },
+const TOP_GROUP_OPTIONS_STOPLOSS = [
+  { value: "line",           label: "Line"             },
+  { value: "line,sdwt_prod", label: "Line + 분임조"     },
+  { value: "line,eqp_model", label: "Line + EQP Model" },
+  { value: "eqp_model",      label: "EQP Model"        },
+  { value: "sdwt_prod",      label: "분임조"            },
+];
+const TOP_GROUP_OPTIONS_LOSSRAW = [
+  { value: "state",      label: "State (원인)" },
+  { value: "param_type", label: "Param Type"   },
+  { value: "param_name", label: "Param Name"   },
+  { value: "eqp_id",     label: "EQP ID"       },
 ];
 
 /**
@@ -175,15 +186,15 @@ const TOP_GROUP_OPTIONS = [
  *   1. 백엔드(ratio_service.py)의 VALID_GROUP_BY 에 컬럼명 추가
  *   2. ratio_service.py 의 group_key_map 에 해당 컬럼 분기 추가
  *   3. 여기 RATIO_GROUP_OPTIONS 에 { value, label } 한 줄 추가
- *   4. (param_type/param_name 은 interlock_raw 조인 구현 후 노출 예정)
  */
 const RATIO_GROUP_OPTIONS = [
-  { value: "state",     label: "State (원인)"   },
-  { value: "eqp_id",    label: "EQP ID"          },
-  { value: "eqp_model", label: "EQP Model"       },
-  { value: "line",      label: "Line"            },
-  { value: "sdwt_prod", label: "SDWT Prod (분임조)" },
-  // TODO: param_type / param_name — interlock_raw join 구현 후 활성화
+  { value: "state",      label: "State (원인)"      },
+  { value: "eqp_id",     label: "EQP ID"             },
+  { value: "eqp_model",  label: "EQP Model"          },
+  { value: "line",       label: "Line"               },
+  { value: "sdwt_prod",  label: "SDWT Prod (분임조)" },
+  { value: "param_type", label: "Param Type"         },
+  { value: "param_name", label: "Param Name"         },
 ];
 
 const MSG = {
@@ -219,6 +230,8 @@ const state = {
   ratioGroupBy: "state",
   /** @type {"raw" | "top" | "ratio"} */
   detailMode: "raw",
+  /** @type {"stoploss" | "lossraw"} — Top Show 데이터 소스 */
+  topSource: "stoploss",
   /** @type {"min" | "pct"} — 기본값 % */
   yMode: "pct",
   copilot: { open: false },
@@ -288,6 +301,11 @@ document.addEventListener("DOMContentLoaded", () => {
   _initTopGroupSelect();
   _initRatioGroupSelect();
 
+  // 뒤로가기 등으로 브라우저가 select 값을 복원하면 group 옵션 목록과
+  // 어긋날 수 있으므로 소스는 항상 기본값(stoploss)에서 시작한다.
+  const topSourceEl = document.getElementById("topSourceSelect");
+  if (topSourceEl) topSourceEl.value = state.topSource;
+
   applySharedFiltersToSelects();   // 서버 렌더된 옵션 위에 공유 상태 덮어쓰기
 
   fetchReportData();
@@ -303,6 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   on("applyFilterBtn",    "click",  fetchReportData);
   on("resetFilterBtn",    "click",  resetFilters);
+  on("topSourceSelect",   "change", _onTopSourceChange);
   on("yFieldSelect",      "change", () => {
     fetchReportData();
     if (state.reportRows.length && state.detailMode === "top") renderTopPanel();
@@ -359,7 +378,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 /**
- * Top Show 그룹 선택 드롭다운을 TOP_GROUP_OPTIONS 로 초기 구성한다.
+ * Top Show 그룹 선택 드롭다운을 초기 구성한다 (초기 소스는 stoploss).
  */
 function _initTopGroupSelect() {
   const select = document.getElementById("topGroupSelect");
@@ -371,7 +390,7 @@ function _initTopGroupSelect() {
   }
 
   select.innerHTML = "";
-  TOP_GROUP_OPTIONS.forEach((opt) => {
+  TOP_GROUP_OPTIONS_STOPLOSS.forEach((opt) => {
     const el       = document.createElement("option");
     el.value       = opt.value;
     el.textContent = opt.label;
@@ -380,8 +399,49 @@ function _initTopGroupSelect() {
 
   select.value = "line";
 
-  select.addEventListener("change", renderDetailPanel);
+  select.addEventListener("change", () => {
+    if (state.topSource === "lossraw") {
+      // lossraw 는 group 기준이 ratio_group_by → 서버 재집계 필요
+      state.ratioGroupBy = select.value || "state";
+      _syncRatioGroupSelect();
+      if (state.selectedBars.length) fetchClickDetail();
+    } else {
+      renderTopPanel();
+    }
+  });
   if (topNEl) topNEl.addEventListener("change", renderDetailPanel);
+}
+
+/**
+ * Top Show 데이터 소스 전환 (Stoploss ↔ Loss Raw).
+ *
+ * - stoploss : report_stoploss 를 프론트에서 집계 (기존 동작)
+ * - lossraw  : tpm_eqp_loss 기반 ratio 응답(state.ratioRows) 을 재활용.
+ *              group 기준이 서버 집계 파라미터라 값이 바뀌면 재조회한다.
+ */
+function _onTopSourceChange() {
+  state.topSource = document.getElementById("topSourceSelect").value;
+  const opts = state.topSource === "lossraw"
+    ? TOP_GROUP_OPTIONS_LOSSRAW : TOP_GROUP_OPTIONS_STOPLOSS;
+  const sel = document.getElementById("topGroupSelect");
+  sel.innerHTML = opts.map((o) =>
+    `<option value="${o.value}">${o.label}</option>`).join("");
+
+  if (state.topSource === "lossraw") {
+    // lossraw 는 group 기준이 ratio_group_by 로 서버 재집계 필요
+    state.ratioGroupBy = sel.value;
+    _syncRatioGroupSelect();
+    if (state.selectedBars.length) fetchClickDetail();
+    else renderTopPanel();
+  } else {
+    renderTopPanel();
+  }
+}
+
+/** Ratio 패널의 집계 기준 select 를 state.ratioGroupBy 와 맞춘다. */
+function _syncRatioGroupSelect() {
+  const el = document.getElementById("ratioGroupSelect");
+  if (el && el.value !== state.ratioGroupBy) el.value = state.ratioGroupBy;
 }
 
 /**
@@ -979,6 +1039,10 @@ function renderRawTable() {
  * - y_mode  : "min" → 절대값(분) / "pct" → plan_time 대비 %
  */
 function renderTopPanel() {
+  const source = document.getElementById("topSourceSelect")?.value || "stoploss";
+  if (source === "lossraw") return _renderTopPanelLossRaw();
+
+  // ── 이하 기존 stoploss 로직 그대로 ──
   const reportRows = Array.isArray(state.reportRows) ? state.reportRows : [];
   if (!reportRows.length) {
     showToast("Top Show 집계용 report 데이터가 없습니다.");
@@ -1063,6 +1127,102 @@ function renderTopPanel() {
   });
 
   _renderTopTable();
+}
+
+/**
+ * Top Show — Loss Raw 소스 렌더링.
+ * state.ratioRows (tpm_eqp_loss 기반 서버 집계) 를 loss_time_min 기준
+ * 수평 bar chart 로 그린다. 그룹 키는 현재 ratio_group_by 컬럼.
+ */
+function _renderTopPanelLossRaw() {
+  const rows = (state.ratioRows || []).slice();
+  const gb   = state.ratioGroupBy || "state";
+
+  if (!rows.length) {
+    // 이전 소스(stoploss) 차트가 남아 오해를 부르지 않도록 비운다
+    Plotly.react("chartTop", [], {
+      annotations: [{ text: "Loss 집계 데이터가 없습니다", xref: "paper", yref: "paper",
+                      x: 0.5, y: 0.5, showarrow: false, font: { color: "#999", size: 13 } }],
+      margin: { t: 8, b: 30, l: 40, r: 20 },
+      xaxis: { visible: false }, yaxis: { visible: false },
+      plot_bgcolor: "transparent", paper_bgcolor: "transparent",
+    }, { displayModeBar: false });
+    _renderTopLossRawTable([], gb);
+    showToast("Loss 집계 데이터가 없습니다.");
+    return;
+  }
+
+  const topN = Math.max(1, parseInt(document.getElementById("topNInput").value, 10) || 10);
+  const sorted = rows
+    .sort((a, b) => (b.loss_time_min || 0) - (a.loss_time_min || 0))
+    .slice(0, topN);
+
+  const yLabels = sorted.map((r) => r[gb] || "-");
+  const xValues = sorted.map((r) => r.loss_time_min || 0);
+
+  const isDark    = document.documentElement.getAttribute("data-theme") === "dark";
+  const fontColor = isDark ? "#94a3b8" : "#64748b";
+
+  const traces = [{
+    type: "bar", orientation: "h",
+    x: xValues, y: yLabels,
+    marker: { color: yLabels.map((_, i) => COLORS[i % COLORS.length]) },
+    text: xValues.map((v) => v.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " min"),
+    textposition: "auto",
+    hovertemplate: "<b>%{y}</b><br>Loss: %{x:,.1f} min<extra></extra>",
+  }];
+  const layout = {
+    margin: { t: 8, b: 30, l: 160, r: 60 },
+    xaxis: { title: { text: "Loss (min)", font: { size: 11 } }, automargin: true, fixedrange: true },
+    yaxis: { automargin: true, fixedrange: true, autorange: "reversed" },
+    plot_bgcolor: "transparent", paper_bgcolor: "transparent",
+    font: { family: "Inter, sans-serif", size: 11, color: fontColor },
+    hoverlabel: { bgcolor: "#0f172a", font: { color: "#f1f5f9", size: 11 }, bordercolor: "#334155" },
+  };
+  Plotly.react("chartTop", traces, layout, { responsive: true, displayModeBar: false });
+
+  // stoploss 소스의 bar 클릭(→ eqp-loss-detail) 은 이 소스에 해당 없음
+  const topEl = document.getElementById("chartTop");
+  if (topEl && typeof topEl.removeAllListeners === "function") {
+    topEl.removeAllListeners("plotly_click");
+  }
+
+  _renderTopLossRawTable(sorted, gb);
+}
+
+/** Loss Raw 소스일 때 차트 옆 테이블 (그룹 / Loss(min)). */
+function _renderTopLossRawTable(rows, groupBy) {
+  const thead = document.getElementById("topTableHead");
+  const tbody = document.getElementById("topTableBody");
+  if (!thead || !tbody) return;
+
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  const groupLabel = (RATIO_GROUP_OPTIONS.find((o) => o.value === groupBy)?.label) || groupBy;
+  const headerRow  = document.createElement("tr");
+  [groupLabel, "Loss (min)"].forEach((label, i) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (i === 1) th.style.textAlign = "right";
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+
+  const fragment = document.createDocumentFragment();
+  rows.forEach((row) => {
+    const tr  = document.createElement("tr");
+    const td1 = document.createElement("td");
+    td1.textContent = row[groupBy] || "-";
+    const td2 = document.createElement("td");
+    td2.textContent = Number(row.loss_time_min || 0)
+      .toLocaleString(undefined, { maximumFractionDigits: 1 });
+    td2.style.textAlign = "right";
+    tr.appendChild(td1);
+    tr.appendChild(td2);
+    fragment.appendChild(tr);
+  });
+  tbody.appendChild(fragment);
 }
 
 function _renderTopTable() {
