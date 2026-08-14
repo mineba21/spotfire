@@ -2,9 +2,11 @@ from django.db import connections
 from django.test import TransactionTestCase
 
 from interlock_ai.models import SpotfireRaw, SpotfireReport, TABLE_RAW
+from interlock_ai.services.chart_service import (
+    get_filter_options_from_cube, invalidate_cube,
+)
 from interlock_ai.services.filter_service import build_filter_q
 from interlock_ai.services.query_builder import execute_query
-from interlock_ai.views import _get_distinct
 
 
 class InterlockLinePrefixTests(TransactionTestCase):
@@ -26,6 +28,7 @@ class InterlockLinePrefixTests(TransactionTestCase):
         with connection.schema_editor() as schema:
             for model in reversed(cls._created_models):
                 schema.delete_model(model)
+        invalidate_cube()   # 전역 캐시라 다른 테스트로 새어나가지 않도록 비운다
         super().tearDownClass()
 
     def setUp(self):
@@ -62,8 +65,12 @@ class InterlockLinePrefixTests(TransactionTestCase):
                 slot_no="1",
             )
 
+        # 사이드바 옵션은 cube 에서 나오므로 방금 넣은 데이터로 다시 빌드시킨다
+        invalidate_cube()
+
     def test_distinct_line_options_are_prefix_deduped(self):
-        self.assertEqual(_get_distinct("line"), ["AB", "CD"])
+        # 구 views._get_distinct 는 cube 전환 때 제거됨 → 같은 성질을 cube 옵션으로 검증
+        self.assertEqual(get_filter_options_from_cube()["lines"], ["AB", "CD"])
 
     def test_line_filter_uses_prefix_startswith(self):
         q = build_filter_q({"line": ["AB"]})
