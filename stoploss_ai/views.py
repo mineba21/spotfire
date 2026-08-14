@@ -193,7 +193,7 @@ def api_eqp_loss_detail(request):
 # 설비 Loss 분석 (tpm_eqp_loss 드릴다운) — kind → param_type → param_name → raw
 # ─────────────────────────────────────────────────────────────────
 
-LOSSRAW_FILTER_PARAMS = ["area", "station", "kind", "param_type"]
+LOSSRAW_FILTER_PARAMS = ["area", "eqp_id", "kind", "param_type"]
 
 
 def _parse_lossraw_filters(GET):

@@ -6,8 +6,9 @@ loss_time_min(float 컬럼) 을 DB Sum 으로 집계 — Python 계산/캐싱 �
 
 드릴다운: kind → param_type → param_name → raw
 
-사이드바 필터의 "설비" 는 tpm_eqp_loss.station 컬럼이다.
-station 과 eqp_id 는 별도 컬럼이며 추후 값이 달라질 예정이라 둘 다 노출한다.
+사이드바 설비 필터는 tpm_eqp_loss.eqp_id 컬럼 기준이다.
+station 과 eqp_id 는 별도 컬럼이며 추후 값이 달라질 예정이라
+raw 테이블에는 두 컬럼을 모두 노출한다.
 """
 from django.db.models import Count, Q, Sum
 
@@ -22,7 +23,7 @@ UNCLASSIFIED = "(미분류)"
 LEVEL_FIELD   = {"kind": "kind", "param_type": "param_type", "param_name": "param_name"}
 LEVEL_PARENTS = {"kind": [], "param_type": ["kind"], "param_name": ["kind", "param_type"]}
 
-LOSSRAW_FILTER_FIELDS = ["area", "station", "kind", "param_type"]
+LOSSRAW_FILTER_FIELDS = ["area", "eqp_id", "kind", "param_type"]
 
 RAW_COLUMNS = ["yyyymmdd", "area", "station", "eqp_id", "start_time", "end_time",
                "kind", "state", "param_type", "param_name", "loss_time_min"]
@@ -84,7 +85,7 @@ def get_filter_options(start=None, end=None, constraints=None):
         )
     return {
         "areas":       _distinct("area"),
-        "stations":    _distinct("station"),
+        "eqp_ids":     _distinct("eqp_id"),
         "kinds":       _distinct("kind"),
         "param_types": _distinct("param_type"),
     }

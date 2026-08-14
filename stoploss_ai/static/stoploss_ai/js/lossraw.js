@@ -8,7 +8,7 @@
  *   bar 값 = loss_time_min 합 (수평 bar, 내림차순)
  *
  * 사이드바:
- *   기간(start/end, daterangepicker) + area(라인) / station(설비) / kind / param_type
+ *   기간(start/end, daterangepicker) + area(라인) / eqp_id(설비) / kind / param_type
  *   - 상위 필터 변경 시 하위 옵션 cascading 갱신
  *   - Apply 버튼 없이 change 즉시 재조회 (auto-apply)
  *   - 기간 기본값: 최근 3개월 (하한 LOWER_BOUND)
@@ -57,7 +57,7 @@ const NUMERIC_COLS = new Set(["loss_time_min"]);
 // cascading 순서 = 배열 순서 (상위 → 하위)
 const FILTER_ORDER = [
   { id: "filterArea",      field: "area",       dataKey: "areas"       },
-  { id: "filterStation",   field: "station",    dataKey: "stations"    },
+  { id: "filterEqpId",     field: "eqp_id",     dataKey: "eqp_ids"     },
   { id: "filterKind",      field: "kind",       dataKey: "kinds"       },
   { id: "filterParamType", field: "param_type", dataKey: "param_types" },
 ];
@@ -84,10 +84,10 @@ const _lastRender = {};
 let _drpStart = null;
 let _drpEnd   = null;
 
-/** 설비(station) 검색 */
-let _stationMaster   = [];
-const _stationSelected = new Set();
-let _stationSearchTimer = null;
+/** 설비(eqp_id) 검색 */
+let _eqpIdMaster   = [];
+const _eqpIdSelected = new Set();
+let _eqpIdSearchTimer = null;
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -103,12 +103,12 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   });
 
-  const stationEl = document.getElementById("filterStation");
-  if (stationEl) {
-    _stationMaster = Array.from(stationEl.options)
+  const eqpIdEl = document.getElementById("filterEqpId");
+  if (eqpIdEl) {
+    _eqpIdMaster = Array.from(eqpIdEl.options)
       .map((o) => o.value).filter((v) => v !== ALL_VALUE);
   }
-  _syncStationSelected();
+  _syncEqpIdSelected();
 
   function on(id, event, handler) {
     const el = document.getElementById(id);
@@ -120,7 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
   FILTER_ORDER.forEach((f, idx) => {
     on(f.id, "change", async () => {
       normalizeAll(f.id);
-      if (f.id === "filterStation") _syncStationSelected();
+      if (f.id === "filterEqpId") _syncEqpIdSelected();
       await refreshFilterOptions(idx);
       loadA();
     });
@@ -128,9 +128,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initDateFilters();   // 기간 필터는 자체 apply 핸들러에서 재조회
 
-  on("stationSearch", "input", () => {
-    clearTimeout(_stationSearchTimer);
-    _stationSearchTimer = setTimeout(_applyStationSearch, 200);
+  on("eqpIdSearch", "input", () => {
+    clearTimeout(_eqpIdSearchTimer);
+    _eqpIdSearchTimer = setTimeout(initEqpIdSearch, 200);
   });
 
   on("resetFilterBtn",     "click", resetFilters);
@@ -307,18 +307,18 @@ async function refreshFilterOptions(changedIdx = -1) {
   });
 }
 
-/** 옵션 교체 + 기존 선택 보존 (없으면 ALL). station 은 검색 master 도 갱신. */
+/** 옵션 교체 + 기존 선택 보존 (없으면 ALL). eqp_id 는 검색 master 도 갱신. */
 function rebuildSelect(selectId, newValues) {
   const el = document.getElementById(selectId);
   if (!el || !Array.isArray(newValues)) return;
 
-  if (selectId === "filterStation") {
-    _stationMaster = newValues.slice();
+  if (selectId === "filterEqpId") {
+    _eqpIdMaster = newValues.slice();
     // 새 옵션 목록에 없는 선택값은 버린다
-    Array.from(_stationSelected).forEach((v) => {
-      if (!_stationMaster.includes(v)) _stationSelected.delete(v);
+    Array.from(_eqpIdSelected).forEach((v) => {
+      if (!_eqpIdMaster.includes(v)) _eqpIdSelected.delete(v);
     });
-    _applyStationSearch();   // 검색어 + 선택 상태를 반영해 재구성
+    initEqpIdSearch();   // 검색어 + 선택 상태를 반영해 재구성
     return;
   }
 
@@ -340,16 +340,16 @@ function rebuildSelect(selectId, newValues) {
   );
 }
 
-/** 검색어 부분일치 + 이미 선택된 항목으로 #filterStation 옵션 재구성. */
-function _applyStationSearch() {
-  const el = document.getElementById("filterStation");
+/** 검색어 부분일치 + 이미 선택된 항목으로 #filterEqpId 옵션 재구성. */
+function initEqpIdSearch() {
+  const el = document.getElementById("filterEqpId");
   if (!el) return;
 
-  const term = (document.getElementById("stationSearch")?.value || "")
+  const term = (document.getElementById("eqpIdSearch")?.value || "")
     .trim().toLowerCase();
 
-  const visible = _stationMaster.filter((v) =>
-    (!term || String(v).toLowerCase().includes(term)) || _stationSelected.has(v)
+  const visible = _eqpIdMaster.filter((v) =>
+    (!term || String(v).toLowerCase().includes(term)) || _eqpIdSelected.has(v)
   );
 
   el.innerHTML = `<option value="${ALL_VALUE}">ALL</option>` +
@@ -357,26 +357,26 @@ function _applyStationSearch() {
 
   let restored = 0;
   Array.from(el.options).forEach((o) => {
-    if (o.value !== ALL_VALUE && _stationSelected.has(o.value)) {
+    if (o.value !== ALL_VALUE && _eqpIdSelected.has(o.value)) {
       o.selected = true;
       restored++;
     }
   });
   if (restored === 0) el.options[0].selected = true;
 
-  _prevSelected["filterStation"] = new Set(
+  _prevSelected["filterEqpId"] = new Set(
     Array.from(el.selectedOptions).map((o) => o.value)
   );
 }
 
 /** select 선택 → 검색과 무관하게 유지되는 Set 동기화 (ALL 이면 clear). */
-function _syncStationSelected() {
-  const el = document.getElementById("filterStation");
+function _syncEqpIdSelected() {
+  const el = document.getElementById("filterEqpId");
   if (!el) return;
   const selected = Array.from(el.selectedOptions).map((o) => o.value);
-  _stationSelected.clear();
+  _eqpIdSelected.clear();
   if (!selected.includes(ALL_VALUE)) {
-    selected.forEach((v) => _stationSelected.add(v));
+    selected.forEach((v) => _eqpIdSelected.add(v));
   }
 }
 
@@ -388,9 +388,10 @@ async function resetFilters() {
     _prevSelected[f.id] = new Set([ALL_VALUE]);
   });
 
-  const searchEl = document.getElementById("stationSearch");
+  const searchEl = document.getElementById("eqpIdSearch");
   if (searchEl) searchEl.value = "";
-  _stationSelected.clear();
+  _eqpIdSelected.clear();
+  initEqpIdSearch();          // 검색어 해제 상태로 옵션 재구성
 
   _resetDateFilters();
 
